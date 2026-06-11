@@ -1,0 +1,16 @@
+# Obsidian
+.obsidian/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Quartz local preview artifacts (build happens in CI from a cloned Quartz)
+public/
+.quartz-cache/
+node_modules/

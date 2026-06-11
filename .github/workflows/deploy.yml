@@ -1,0 +1,67 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout content repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone Quartz
+        run: |
+          git clone --depth 1 --branch v4 https://github.com/jackyzha0/quartz.git /tmp/quartz
+
+      - name: Copy content into Quartz
+        run: |
+          rm -rf /tmp/quartz/content/*
+          cp -r content/* /tmp/quartz/content/
+
+      - name: Copy Quartz config
+        run: |
+          cp quartz.config.ts /tmp/quartz/quartz.config.ts
+          cp quartz.layout.ts /tmp/quartz/quartz.layout.ts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        working-directory: /tmp/quartz
+        run: npm ci
+
+      - name: Build Quartz
+        working-directory: /tmp/quartz
+        run: npx quartz build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/quartz/public
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
