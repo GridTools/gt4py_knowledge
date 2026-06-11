@@ -76,8 +76,11 @@ and agents consult. It must stay current and keyword-rich:
   and honest about the content.
 - Keep an entry's keywords **in sync with the document's `tags` frontmatter**
   (same vocabulary; Quartz also builds tag pages from `tags`).
-- Group idea entries under a `### <person>` subsection of **Ideas**; nest
-  appendices and implementation subdirs under their parent proposal.
+- Group idea entries under a `### <person>` subsection of **Ideas**. Index
+  **only the main proposal** document — do **not** add index entries for its
+  appendices (`<slug>_research.md`, `<slug>_<topic>.md`) or implementation
+  subdirs. Reference those from within the proposal document itself (with
+  `[[wikilinks]]`), so the index stays a flat map of proposals.
 - When a proposal is **accepted**, move the file from `ideas/<person>/` to
   `accepted/` and move its index entry from **Ideas** to **Accepted**, keeping
   the keywords. When an accepted proposal is **retired**, delete the file and

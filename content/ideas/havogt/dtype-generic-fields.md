@@ -195,6 +195,12 @@ scan operators, plus several TODOs asking for exactly this feature:
 
 ## 3. Prior art
 
+This is the short version; the full research — Python generics mechanics, the
+per-framework survey (jaxtyping, Numba, Taichi, Triton, DaCe, torchtyping),
+numpy's static-typing situation, staged/two-level typing theory, and the
+related GT4Py issues — is in
+[[ideas/havogt/dtype-generic-fields_research|the prior-art appendix]].
+
 ### 3.1 Spelling: how to write a dtype-generic annotation
 
 - **numpy.typing** converged on exactly the pattern proposed here: a

@@ -29,8 +29,7 @@ Work-in-progress proposals, organized by contributor.
 
 - [[ideas/havogt/dtype-generic-fields|Dtype-generic fields in gt4py.next]] — keywords: type-system, generics, dtype, frontend, foast, past, monomorphization, field-operators, type-checking
 
-<!-- Entry format (nest appendices/implementations under the proposal):
+<!-- Entry format (index only the main proposal; link appendices/implementations
+     from within the proposal document itself, not here):
 - [[ideas/havogt/<slug>|Title]] — keywords: keyword1, keyword2
-  - [[ideas/havogt/<slug>_research|Research notes]] — keywords: ...
-  - `ideas/havogt/<slug>/` — implementation sketch
 -->
