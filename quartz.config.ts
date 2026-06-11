@@ -15,7 +15,7 @@ const config: QuartzConfig = {
     analytics: null,
     locale: "en-US",
     // NOTE: must match the GitHub Pages URL of wherever this repo finally lives.
-    baseUrl: "havogt.github.io/gt4py_knowledge",
+    baseUrl: "graitools.github.io/gt4py_knowledge",
     // Folders excluded from the published site (templates/scratch/Obsidian dirs).
     ignorePatterns: ["private", "templates", ".obsidian"],
     defaultDateType: "modified",
