@@ -42,13 +42,10 @@ in the field dtype, spelled with Python's native generics so the same
 annotation is meaningful to mypy and to the DSL frontend:
 
 ```python
-from typing import TypeVar
 import gt4py.next as gtx
 
-T = TypeVar("T", gtx.float32, gtx.float64)  # value-constrained TypeVar
-
 @gtx.field_operator
-def diffusion(
+def diffusion[T: (gtx.float32, gtx.float64)](  # PEP 695 value-constrained type param
     a: gtx.Field[gtx.Dims[I, J], T],
     b: gtx.Field[gtx.Dims[I, J], T],
 ) -> gtx.Field[gtx.Dims[I, J], T]:
@@ -58,6 +55,15 @@ diffusion(a32, b32, out=o32, offset_provider={})  # compiles a float32 variant
 diffusion(a64, b64, out=o64, offset_provider={})  # compiles a float64 variant
 diffusion(a32, b64, out=o64, offset_provider={})  # error: inconsistent binding of 'T'
 ```
+
+The PEP 695 inline `[T: (...)]` spelling (Python 3.12+, now GT4Py's floor) is
+preferred: the type param is naturally
+scoped to the operator, which is exactly the per-signature identity the design
+needs (§4.1), and there is no module-level `TypeVar` object to accidentally
+share or shadow. The equivalent pre-PEP-695 spelling — a module-level
+`T = TypeVar("T", gtx.float32, gtx.float64)` used in the annotations — produces
+the same runtime `TypeVar` objects and remains accepted, but is no longer the
+recommended form.
 
 Non-goals of the first step (but kept forward-compatible, see §8): dims/rank
 genericity, generic scan operators, `bound=`-style open constraint sets,
@@ -197,16 +203,20 @@ scan operators, plus several TODOs asking for exactly this feature:
   ([numpy.typing docs](https://numpy.org/doc/stable/reference/typing.html)).
   The older `NBitBase` precision-genericity mechanism is deprecated in favor
   of this.
-- **PEP 695** (`def op[T: (float32, float64)](...)`, Python 3.12+) cannot be
-  *required* since GT4Py supports Python 3.10-3.14, but old-style
+- **PEP 695** (`def op[T: (float32, float64)](...)`, Python 3.12+) is the
+  preferred spelling now that GT4Py targets 3.12+: the constrained type param
+  is scoped to the operator, which matches the per-signature identity the
+  design needs, and the variables are reachable both via
+  `func.__type_params__` and (since they appear in the annotations)
+  `typing.get_type_hints` + `get_args`. The old-style module-level
   `TypeVar("T", float32, float64)` is semantically identical for type
-  checkers, runtime-introspectable via `typing.get_type_hints` + `get_args`
-  (the TypeVar survives literally in the args), and forward-compatible: PEP
-  695 syntax produces the same runtime objects via `__type_params__`. Caveat:
-  PEP 695 TypeVars evaluate bounds/constraints *lazily* — do not assume plain
+  checkers and produces the same runtime objects, so the frontend accepts
+  both. Caveat: PEP 695 type params evaluate bounds/constraints *lazily*
+  (`__constraints__` is computed on access) — introspect, do not assume plain
   attributes ([PEP 695](https://peps.python.org/pep-0695/)).
-- **PEP 696** TypeVar defaults (`typing_extensions >= 4.12` on 3.10+) would
-  later allow "unparameterized `Field` means `float64`"
+- **PEP 696** TypeVar defaults are native in `typing` from Python 3.13 (no
+  `typing_extensions` backport needed at our 3.12+ floor — 3.12 still requires
+  it), and would later allow "unparameterized `Field` means `float64`"
   ([PEP 696](https://peps.python.org/pep-0696/)).
 - **jaxtyping** achieves dtype polymorphism via dtype *groups* as runtime-
   checked constraints (`Float[Array, "n m"]`), deliberately hiding dtype from
@@ -243,8 +253,10 @@ monomorphization is the natural elaboration of staged polymorphism
   full substitution (the TF Eager paper discusses trace-cache keying bugs).
   GT4Py's `arg_specialization_key` already hashes all argument types.
 - **typing-runtime drift**: `typing`/`typing_extensions` version differences
-  bit eve before ([#968](https://github.com/GridTools/gt4py/issues/968));
-  keep TypeVar introspection inside `eve.extended_typing`.
+  bit eve before ([#968](https://github.com/GridTools/gt4py/issues/968)); a
+  3.12+ floor narrows the spread but PEP 695 lazy evaluation and the
+  3.12-vs-3.13 PEP 696 split still differ across the supported range, so keep
+  TypeVar/type-param introspection inside `eve.extended_typing`.
 - **mypy holes**: constrained dtype TypeVars in numpy-like generics have known
   mypy gaps ([mypy#17228](https://github.com/python/mypy/issues/17228));
   budget for extending the existing GT4Py mypy plugin rather than expecting
@@ -265,9 +277,11 @@ class TypeVarType(DataType):
   `NamedCollectionType` members, and `foast.Symbol`'s
   `Union[SymbolT, ts.DeferredType]` (whose `DataTypeT` is bound to
   `ts.DataType`).
-- Identity is the name, scoped to one operator signature; two *distinct*
-  TypeVar objects with the same name in one signature are detected and
-  rejected at parse time. As an eve frozen DataModel it gets deterministic
+- Identity is the name, scoped to one operator signature. With the preferred
+  PEP 695 spelling the type param is declared once in `[T: (...)]` and cannot
+  collide; for the module-level `TypeVar` spelling, two *distinct* TypeVar
+  objects with the same name in one signature are detected and rejected at
+  parse time. As an eve frozen DataModel it gets deterministic
   `eq`/`hash`/`content_hash` for free (needed for pool cache keys and
   `fingerprint_stage`).
 - `ts.DeferredType` is *not* replaced: it keeps meaning "not yet inferred",
@@ -382,10 +396,15 @@ These are independently landable, each PR-sized, and valuable on their own:
 
 - `type_translation.from_type_hint`: a branch for
   `isinstance(canonical_type, typing.TypeVar)` reading `__constraints__`
-  (reject empty-constraint / `bound=`-only TypeVars in v0 with a clear
-  message); relax the Field-dtype check to accept `TypeVarType`. Detect two
-  distinct same-named TypeVars in one signature during `func_to_foast`
-  annotation processing.
+  (covers both the PEP 695 `[T: (...)]` type params — which surface as
+  `TypeVar`s in the resolved annotations and on `func.__type_params__` — and
+  the module-level spelling; read constraints via `eve.extended_typing` so the
+  lazy PEP 695 evaluation is handled uniformly; reject empty-constraint /
+  `bound=`-only type vars in v0 with a clear message); relax the Field-dtype
+  check to accept `TypeVarType`. For the module-level spelling, additionally
+  detect two distinct same-named TypeVars in one signature during
+  `func_to_foast` annotation processing (impossible by construction for PEP
+  695).
 - `type_info.promote` + dtype predicates (`is_arithmetic`, `is_logical`,
   `is_floating_point`, `is_integral`): `T` with itself promotes to itself;
   `T` with anything else raises (D3); predicates evaluate over the constraint

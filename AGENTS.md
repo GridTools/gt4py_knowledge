@@ -53,6 +53,15 @@ content/
    links — Quartz resolves them.
 5. **Update `content/index.md`** (next section). This is required.
 
+## Python version assumptions
+
+- Proposals **may freely assume Python 3.12+** and use 3.12+ features (e.g. PEP
+  695 type parameter syntax) — gt4py is dropping support for earlier versions
+  soon, so designs need not work around 3.10/3.11.
+- If features of **Python 3.13 or newer** would simplify or improve a design,
+  **include them** in the design (note the minimum version they require) rather
+  than designing around their absence.
+
 ## Keep the index useful
 
 `content/index.md` is the map of everything here and the first thing readers
