@@ -27,7 +27,7 @@ Work-in-progress proposals, organized by contributor.
 
 ### havogt
 
-_None yet — copy `templates/idea.md` to `ideas/havogt/<slug>.md`._
+- [[ideas/havogt/dtype-generic-fields|Dtype-generic fields in gt4py.next]] — keywords: type-system, generics, dtype, frontend, foast, past, monomorphization, field-operators, type-checking
 
 <!-- Entry format (nest appendices/implementations under the proposal):
 - [[ideas/havogt/<slug>|Title]] — keywords: keyword1, keyword2
