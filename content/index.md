@@ -33,6 +33,7 @@ Work-in-progress proposals, organized by contributor.
 - [[ideas/havogt/closure-variable-resolution|Closure variable resolution in gt4py.next]] — keywords: frontend, foast, past, closure-variables, name-resolution, constants, builtins, aliasing, gtir, lowering
 - [[ideas/havogt/scan-redesign|Redesign of the vertical scan in gt4py.next]] — keywords: scan, vertical, reduction, boundary-conditions, windows, k-caches, fusion, embedded, jax, frontend
 - [[ideas/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]] — keywords: mesh, halos, unstructured, connectivities, offset-provider, domain-inference, distributed, halo-exchange, prior-art
+- [[ideas/havogt/field-data-protocol|A FieldData protocol for gt4py.next embedded fields]] — keywords: fields, domain, data, protocol, embedded, function-fields, boundary-conditions, materialization, lazy, concat_where, origin, prior-art
 
 <!-- Entry format (index only the main proposal; link appendices/implementations
      from within the proposal document itself, not here):
