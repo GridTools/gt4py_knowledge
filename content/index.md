@@ -30,6 +30,7 @@ Work-in-progress proposals, organized by contributor.
 - [[ideas/havogt/dtype-generic-fields|Dtype-generic fields in gt4py.next]] — keywords: type-system, generics, dtype, frontend, foast, past, monomorphization, field-operators, type-checking
 - [[ideas/havogt/dimension-generic-fields|Generic dimensions and statically typed staggering]] — keywords: type-system, generics, dimensions, staggering, type-checking, mypy, frontend, foast, monomorphization, unstructured
 - [[ideas/havogt/dependent-local-dimensions|Dependent local dimensions and connectivity chains]] — keywords: type-system, dimensions, unstructured, connectivities, local-dimensions, reduction, neighbor-sum, type-checking
+- [[ideas/havogt/closure-variable-resolution|Closure variable resolution in gt4py.next]] — keywords: frontend, foast, past, closure-variables, name-resolution, constants, builtins, aliasing, gtir, lowering
 
 <!-- Entry format (index only the main proposal; link appendices/implementations
      from within the proposal document itself, not here):
