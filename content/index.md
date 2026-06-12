@@ -28,6 +28,7 @@ Work-in-progress proposals, organized by contributor.
 ### havogt
 
 - [[ideas/havogt/dtype-generic-fields|Dtype-generic fields in gt4py.next]] — keywords: type-system, generics, dtype, frontend, foast, past, monomorphization, field-operators, type-checking
+- [[ideas/havogt/otf-pipeline-cleanup|OTF pipeline cleanup (incremental improvements)]] — keywords: otf, workflow, compilation, caching, fingerprint, backend, factory_boy, dace, gtfn, cleanup, tech-debt
 
 <!-- Entry format (index only the main proposal; link appendices/implementations
      from within the proposal document itself, not here):
