@@ -41,14 +41,17 @@ gt4py/
     errors/
 ```
 
-Proposed layer assignment (see main proposal for the rule):
+Proposed layer assignment (see main proposal for the rule and for the
+**first-steps scope**: `gt4py.next` + shared infra/utils now; `eve` becomes
+internal; `gt4py.cartesian` is left as-is and only repointed at the shared infra,
+folded into the layers later):
 
 | Layer | Gets |
 | --- | --- |
-| utils | `eve`, `_core` (→ `defs`), pure-python helpers |
-| infrastructure | `next/otf/{compilation,binding}`, `next/otf/workflow`+`toolchain`, `*/config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` |
-| core | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, runner orchestration; all of `cartesian/` frontend+IR+backends |
-| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.cartesian`, `gt4py.eve`, `gt4py.storage` |
+| utils | `eve` (now **internal** — IR-tree framework, name not preserved), `_core` (→ `defs`), pure-python helpers |
+| infrastructure | `next/otf/{compilation,binding}`, `next/otf/workflow`+`toolchain`, `config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` — shared by next and cartesian |
+| core | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, runner orchestration. *(cartesian's frontend+IR+backends join here in the later step.)* |
+| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (internal) |
 
 ## 2. Dependency tangles (why the layering is needed)
 
