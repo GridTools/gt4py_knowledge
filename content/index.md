@@ -37,7 +37,7 @@ Work-in-progress proposals, organized by contributor.
 
 ### egparedes
 
-- [[ideas/egparedes/layered-architecture|A layered architecture for gt4py with enforced public/internal decoupling]] — keywords: architecture, layering, tach, modularity, public-api, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, config, allocators, jax, decoupling, migration
+- [[ideas/egparedes/layered-architecture|A layered architecture for gt4py with enforced public/internal decoupling]] — keywords: architecture, layering, tach, modularity, public-api, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, config, allocators, caching, fingerprint, instrumentation, jax, decoupling, migration, tech-debt
 
 <!-- Entry format (index only the main proposal; link appendices/implementations
      from within the proposal document itself, not here):

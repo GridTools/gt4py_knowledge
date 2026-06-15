@@ -101,10 +101,16 @@ class OTFCompileWorkflow(workflow.NamedStepSequence):
     decoration:  workflow.Workflow[stages.ExecutableProgram, stages.ExecutableProgram]
 ```
 
-**Simplification.** `Workflow = Callable[[T], U]`; one `Pipeline` dataclass that
-calls steps in order; `compose(*steps)`; `cached(step, key=...)` wrapper; use
-`dataclasses.replace` instead of a replace-mixin. The contravariant/covariant
-TypeVars exist mostly to thread the combinators and disappear with them.
+The variance annotations promise a **static type safety the framework does not
+deliver** (the steps are validated at runtime; the `MultiWorkflow.step_order()`
+indirection and annotation reflection make the order implicit). **Simplification,
+in two moves.** First, *honest typing in place*: drop `SkippableStep` and the
+rarely-used chain combinators, declare step order as an explicit class-level tuple,
+and document the sequence as runtime-typed. Then, when it moves to `infra`:
+`Workflow = Callable[[T], U]`; one `Pipeline` dataclass that calls steps in order;
+`compose(*steps)`; a `cached(step, key=...)` wrapper; `dataclasses.replace` instead
+of a replace-mixin. The contravariant/covariant TypeVars exist mostly to thread the
+combinators and disappear with them.
 
 ### 3.2 `otf/toolchain.py` — composition dressed as Protocol classes
 
@@ -137,8 +143,13 @@ class DaCeWorkflowFactory(factory.Factory):
     compilation = factory.SubFactory(DaCeCompilationStepFactory, ...)
 ```
 
-**Simplification.** A builder function with ordinary defaults + a `cached: bool`
-flag returning the dataclass directly; removes the `factory` runtime dependency.
+Beyond the indirection, configuration flows through stringly-typed `__`-path
+overrides (e.g. `compilation__cmake_build_type=...`), with trait duplication and
+`type: ignore`s where the factory escapes the type checker. **Simplification.** A
+`make_*_toolchain(...)` builder with ordinary keyword defaults + a `cached: bool`
+flag returning the dataclass directly; the shared "cached translation / naming /
+device wiring" deduplicated into one helper used by both gtfn and dace; removes the
+`factory` runtime dependency.
 
 ### 3.4 `custom_layout_allocators.py` — Protocol + `TypeIs` zoo
 
@@ -154,14 +165,44 @@ all validating two magic methods. **Simplification.** A registry
 `dict[DeviceType, Allocator]` with `register(device, alloc)` / `get(device)`;
 keep one Protocol for the allocator call signature if useful, drop the guards.
 
-### 3.5 Two hashing paths for the same data
+### 3.5 Caching spread over uncoordinated layers, several key derivations
 
-`otf/stages.py` has `compilation_hash(...)` built on `hash((...))` *and*
-`fingerprint_compilable_program(...)` built on `content_hash((...))` (today an
-`eve` util; lands in `_internal/utils`) — for the same compilable program, with no documented contract for which to
-use when. **Simplification.** One function, one strategy, documented.
+Caching lives in **four** loosely-coordinated places (translation cache, the
+executor `CachedStep`, the on-disk build cache, and the argument-descriptor cache)
+with **three** different key derivations and no documented contract for which is
+used when. `otf/stages.py` alone has `compilation_hash(...)` built on `hash((...))`
+*and* `fingerprint_compilable_program(...)` built on `content_hash((...))` (today an
+`eve` util; lands in `_internal/utils`) for the *same* compilable program; offset
+providers are hashed by `id()` in at least one path. **Simplification.** One
+canonical content-based `fingerprint(program_def) -> str` (GTIR fingerprint, arg
+types, offset-provider *types*, backend-relevant config, gt4py version), shared by
+the translation cache, the executor step, and — via a `fingerprint → build-dir`
+index — the build cache (so warm starts skip translation). Replace `id()`-based
+offset-provider hashing with content hashing of the provider type + an identity
+fast path. Add an `explain_cache_misses` debug flag: each layer logs its key,
+hit/miss, and the first differing component.
 
-### 3.6 Type-alias chains in `otf/definitions.py`
+### 3.6 No sanctioned stage inspection
+
+There is no supported way to inspect or re-run an intermediate stage, so consumers
+(e.g. the dace runner's `program.py`) duck-type-unwrap workflow internals to reach
+the lowered SDFG. **Simplification.** An `on_stage(name, artifact)` observer on the
+pipeline + a `GT4PY_DUMP_STAGES=<dir>` switch that dumps each artifact (GTIR text,
+generated source, SDFG JSON) per program (MLIR `print-ir-tree-dir` style), and a
+supported `Toolchain.lower(definition, compile_time_args) -> stage artifacts`
+method. The `lower()` boundary is also the core ↔ infrastructure seam (IR → source
+vs source → module), so this clean-up and the layering reinforce each other.
+
+### 3.7 Argument model carries runtime data into compile time
+
+`CompileTimeArgs` mixes genuine compile-time information (types, descriptors,
+offset-provider *types*) with runtime tables some passes still read; `column_axis`
+is dead; and `eval`/`exec`-based codegen is used beyond the one measured hot path
+(`_argument_descriptor_cache_key_from_args`). **Simplification.** Split
+`CompileTimeArgs` into a true compile-time part and an explicitly-named runtime
+bridge; remove `column_axis`; restrict generated `eval`/`exec` to the hot path.
+
+### 3.8 Type-alias chains in `otf/definitions.py`
 
 ```python
 ConcreteProgramDef: TypeAlias = toolchain.ConcreteArtifact[IRDefinitionT, ArgsDefinitionT]
@@ -175,7 +216,7 @@ class`. **Simplification.** Concrete dataclasses (e.g. a `CompilableProgram`
 holding `data: itir.Program` + `args: CompileTimeArgs`) where variance is not
 actually exercised.
 
-### 3.7 Dataclass containers that are really records
+### 3.9 Dataclass containers that are really records
 
 ~38 `@dataclass(frozen=True)` containers across `otf/` (`ProgramSource`,
 `BindingSource`, `CompilableProject`, …) with no methods — `NamedTuple`/
@@ -281,7 +322,7 @@ Conventions worth copying:
    `gt4py._internal.next` (with `gt4py.cartesian` joining the pattern later).
 5. **Concrete types at the boundary**; the generic/variance machinery (where it
    exists) stays internal. This is the principle behind infrastructure
-   simplifications §3.1, §3.2 and §3.6.
+   simplifications §3.1, §3.2 and §3.8.
 
 The net lesson: JAX keeps a large, fast-moving internal codebase shippable by
 making the *public surface a deliberate, thin, explicitly-enumerated facade* and

@@ -1,7 +1,7 @@
 ---
 title: A layered architecture for gt4py with enforced public/internal decoupling
 author: egparedes
-tags: [architecture, layering, tach, modularity, public-api, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, config, allocators, jax, decoupling, migration]
+tags: [architecture, layering, tach, modularity, public-api, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, config, allocators, caching, fingerprint, instrumentation, jax, decoupling, migration, tech-debt]
 created: 2026-06-15
 ---
 
@@ -10,10 +10,11 @@ created: 2026-06-15
 > implementation under a private `gt4py._internal` package while the public
 > package `gt4py.next` becomes a thin re-export facade (JAX's `_src/` pattern).
 > Enforce the layering with [tach](https://docs.gauge.sh/usage/layers/) in CI.
-> Along the way, cut the over-engineered *infrastructure* code (the 5-class `otf`
-> workflow combinators, factory-boy backend builders, the allocator
-> Protocol/`TypeIs` zoo, the duplicated `config`/caching) down to plain callables,
-> dataclasses, and a small registry. **Scope for the first steps:** restructure
+> Along the way, cut the over-engineered *infrastructure* code down to plain
+> callables, dataclasses, and a small registry, and **pay down the `otf`
+> compilation-pipeline debt**: one canonical fingerprint, a sanctioned
+> stage-inspection/dump API, honest combinator typing, plain-code backend builders
+> (no factory-boy), a tightened argument model, and one config. **Scope for the first steps:** restructure
 > `gt4py.next` and the shared infrastructure/utils; **the `eve` package is
 > dissolved into two internal subpackages** — general Python utilities and a
 > toolkit for defining/processing DSL/IR trees — with the `eve` name retired (it
@@ -64,13 +65,25 @@ communicates *intent*, and nothing prevents the layout from decaying further:
   code shared between cartesian and next, and no structural rule that *would*
   encourage sharing.
 
-- **The infrastructure layer is over-engineered.** The `otf` pipeline is built
-  from five generic, variance-annotated workflow classes and chain/replace mixins
-  to express what is a *linear* `translate → bind → compile → decorate` pipeline;
-  backends are assembled with factory-boy `LazyAttribute`/`Trait`/`SubFactory`
-  trees to populate plain dataclasses; allocators are guarded by six `Protocol`s
-  plus ~ten `TypeIs` functions around two magic methods. (Full catalog with file
-  paths in the [[ideas/egparedes/layered-architecture_research|research appendix]].)
+- **The infrastructure layer is over-engineered, and the `otf` compilation
+  pipeline most of all.** `otf` is a generic, statically-typed function-composition
+  framework (`Workflow[StartT, EndT]`, `NamedStepSequence`, `CachedStep`, …) that
+  met its original goal — backends share the binding/build/import stages instead of
+  being monoliths — but accreted concrete friction:
+  - The promised **static type safety is largely illusory**: five variance-annotated
+    workflow classes and chain/replace mixins express what is a *linear*
+    `translate → bind → compile → decorate` pipeline.
+  - **Configuration goes through a second framework** (`factory_boy`) with
+    stringly-typed `__`-path overrides, trait duplication, and `type: ignore`s.
+  - **Caching is spread over four uncoordinated layers with three different key
+    derivations** — including `id()`-based offset-provider hashing — and no
+    documented contract for which key is used when.
+  - There is **no sanctioned way to inspect or re-run intermediate stages**, so
+    consumers (e.g. the dace runner's `program.py`) resort to duck-typed unwrapping
+    of workflow internals.
+  - Allocators are guarded by six `Protocol`s plus ~ten `TypeIs` functions around
+    two magic methods. (Full catalog with file paths in the
+    [[ideas/egparedes/layered-architecture_research|research appendix]].)
 
 The cost is paid every day: slow onboarding, fragile refactors, accidental
 coupling, and an unclear contract for downstream users. **Now** is a good time
@@ -124,7 +137,7 @@ lowering/compilation services, over generic utils.
 | Layer | Responsibility | May import | Contents (today's modules) |
 | --- | --- | --- | --- |
 | **public_api** | The supported import surface. Re-exports only; defines deprecations. | core, infra, utils (to re-export) | `gt4py.next`, `gt4py.storage` (the thin `__init__` facades) |
-| **core** | The gt4py *domain*: field/dimension/domain model, the IRs (FOAST/PAST/ITIR) and their passes, type systems, embedded execution, code generators (IR → source text), and runners that *orchestrate* compile+run. | infrastructure, utils | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, the runner orchestration; plus **`gt4py.cartesian` as-is** (user-facing but tagged *core*, not public_api, because it is the whole implementation rather than a thin facade — until it is split in step 8). |
+| **core** | The gt4py *domain*: field/dimension/domain model, the IRs (FOAST/PAST/ITIR) and their passes, type systems, embedded execution, code generators (IR → source text), and runners that *orchestrate* compile+run. | infrastructure, utils | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, the runner orchestration; plus **`gt4py.cartesian` as-is** (user-facing but tagged *core*, not public_api, because it is the whole implementation rather than a thin facade — until it is split in step 9). |
 | **infrastructure** | DSL-agnostic *services* that know nothing about IR: configuration, caching/hashing, the build system (cmake/ninja + importer), C++ bindings, the pipeline/step machinery, device/buffer/allocator management, instrumentation. | utils | `next/otf/{compilation,binding}`, `next/otf/workflow`, `config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` |
 | **utils** | Domain-agnostic foundations with no gt4py knowledge: general Python helpers, plus a toolkit for defining/processing IR trees (datamodels, node base + traversal, codegen). | (nothing internal) | `utils` (general helpers) and `irtools` (IR/AST toolkit) — **both carved out of today's `eve`**, whose name is retired; `defs` (today's `_core`: scalar/device types, `filecache`, `locking`, `ndarray_utils`) |
 
@@ -248,38 +261,77 @@ between them — and tach requires same-layer edges to be explicit — so a
 edge, `irtools → utils`, is the declared exception above.) `tach` is adopted
 incrementally: start permissive, ratchet to `strict` per module as the moves land.
 
-### Simplify the infrastructure while moving it
+### Clean up and simplify the infrastructure (especially the `otf` pipeline)
 
-The relocation is the moment to delete accidental complexity. Each item below is
-a service that, once in the `infra` layer, should be *small* (details and current
-file paths in the appendix):
+The relocation is the moment to delete accidental complexity. Most of it lives in
+the `otf` compilation pipeline, and most can be paid down **in place** — each item
+below is independently landable and behavior-preserving (details and file paths in
+the appendix). Items **1–4 are high value at low risk and worth doing first**; they
+also build foundations (one fingerprint, a stage-inspection seam) that the layering
+and any deeper redesign reuse, so they never need re-doing.
 
-1. **Pipeline, not combinators.** Replace `otf/workflow.py`'s five classes
-   (`NamedStepSequence`, `MultiWorkflow`, `StepSequence`, `CachedStep`,
-   `SkippableStep`) and the chain/replace mixins with `Workflow = Callable[[T], U]`,
-   one small frozen `Pipeline` dataclass that calls its steps in order, and a
-   `compose()` helper. Use `dataclasses.replace` instead of a `.replace()` mixin;
-   make caching one `cached(step, key=...)` wrapper instead of a class hierarchy.
-2. **Builders, not factory-boy.** Drop the `factory` dependency; replace
-   `*WorkflowFactory` (`LazyAttribute`/`Trait`/`SubFactory`) with plain builder
-   functions and `dataclasses.field(default_factory=...)`. A `cached: bool`
-   parameter replaces a `Trait`.
-3. **A registry, not a Protocol zoo.** Replace the six allocator `Protocol`s and
-   ~ten `TypeIs` guards in `custom_layout_allocators.py` with one allocator
-   registry keyed by device type (`register(device, allocator)` / `get(device)`).
-4. **One config.** Merge `next/config.py` and `cartesian/config.py` into
-   `infra/config.py` (single env-var-driven module); both frontends read it.
-5. **One hashing contract.** Collapse the two fingerprinting paths
-   (`compilation_hash` using `hash()` vs `fingerprint_compilable_program` using
-   `content_hash()`) into one documented function in `infra/caching.py`.
-6. **Concrete types.** Flatten the 5-level `TypeVar → TypeAlias → Protocol →
-   Generic → class` chains in `otf/definitions.py` to concrete dataclasses, and
+1. **One canonical fingerprint** *(small, high value)*. Replace the multiple
+   cache-key derivations with a single content-based
+   `fingerprint(program_def) -> str` — GTIR fingerprint, argument types,
+   offset-provider *types*, backend-relevant config, gt4py version — used by the
+   translation cache, the executor cache step, and (via a `fingerprint → build-dir`
+   index) the build cache, so warm starts skip translation entirely. Replace the
+   `id()`-based offset-provider hashing with content hashing of the provider *type*
+   plus an identity fast path. Lands in `infra/caching`.
+2. **A sanctioned stage-inspection / dump API** *(small, high value)*. Add an
+   optional `on_stage(name, artifact)` observer to the pipeline and a
+   `GT4PY_DUMP_STAGES=<dir>` switch that writes each intermediate artifact (GTIR
+   text, generated source, SDFG JSON) per program (MLIR `print-ir-tree-dir` style).
+   Promote the lowering entry point to a supported method —
+   `Toolchain.lower(definition, compile_time_args) -> stage artifacts` — so
+   consumers stop duck-typed-unwrapping pipeline internals. This sanctioned
+   `lower()` boundary is exactly the **core ↔ infrastructure seam** (IR → source vs
+   source → module): it improves observability *and* realizes the layering.
+3. **`explain_cache_misses` logging** *(small)*. Under a debug flag, each cache
+   layer logs its key, hit/miss, and the first differing key component — turning
+   "why did this recompile?" into a one-line answer.
+4. **Plain-code backend builders, not factory-boy** *(medium, high value)*. A
+   backend becomes a frozen dataclass built by a `make_*_toolchain(...)` function
+   with ordinary keyword arguments (a `cached: bool` flag replaces a `Trait`). This
+   removes the trait duplication, the stringly-typed `__`-path overrides and the
+   `type: ignore`s, lets the shared "cached translation / naming / device wiring" be
+   deduplicated into one helper used by both the gtfn and dace backends, and drops
+   the `factory` runtime dependency.
+5. **Pipeline, not combinators — honest typing first.** Make the combinators honest
+   in place: drop the unused generality (`SkippableStep`, rarely-used chain
+   combinators), declare each pipeline's step order as an explicit class-level tuple
+   instead of via type-annotation reflection, and document the sequence as
+   runtime-typed. The architectural target, reached when the pipeline moves into
+   `infra/pipeline`, is to collapse the remaining classes
+   (`NamedStepSequence`, `MultiWorkflow`, `StepSequence`, `CachedStep`) to
+   `Workflow = Callable[[T], U]` + one small frozen `Pipeline` + `compose()`, with
+   `dataclasses.replace` instead of a replace-mixin and one `cached(step, key=...)`
+   wrapper.
+6. **Tighten the argument model and the types** *(medium)*. Split `CompileTimeArgs`
+   into a true compile-time part (types, descriptors, offset-provider *types*) and
+   an explicitly-named bridge for the passes that still need runtime tables; remove
+   the dead `column_axis`; restrict `eval`/`exec`-based codegen to the one measured
+   hot path (the argument-descriptor cache key) and use ordinary code elsewhere.
+   Then flatten the `otf/definitions.py` type-alias chains
+   (`TypeVar → TypeAlias → Protocol → Generic → class`) to concrete dataclasses and
    inline the `toolchain.py` adapter dataclasses (`DataOnlyAdapter`, …) into
    `functools.partial`/small wrappers.
+7. **One config** *(small)*. Merge `next/config.py` and `cartesian/config.py` into a
+   single env-var-driven `infra/config.py` that both frontends read.
+8. **An allocator registry, not a Protocol zoo** *(small)*. Replace the six
+   allocator `Protocol`s and ~ten `TypeIs` guards in `custom_layout_allocators.py`
+   with one registry keyed by device type (`register(device, allocator)` /
+   `get(device)`), keeping at most one Protocol for the call signature.
+9. **A naming pass** *(small)*. Align the vocabulary with the (eventual) ADR: the
+   per-backend object `Backend → Toolchain`, `executor → compile_pipeline`, and the
+   docstring stage names. This proposal uses **toolchain** for that per-backend
+   compile-pipeline object from here on.
 
-None of these change behavior or performance; they remove indirection that the
-layering makes unnecessary (e.g. generic variance existed largely to thread one
-pipeline through many call sites — a single `Pipeline` type needs none of it).
+None of these change behavior or performance; they remove indirection the layering
+makes unnecessary (e.g. the generic variance existed largely to thread one pipeline
+through many call sites — a single `Pipeline` needs none of it). Items 1–4 remove
+the friction that makes the pipeline "hard to follow, hard to extend"; items 5–9
+reduce the number of concepts a contributor must hold.
 
 ## Implementation steps
 
@@ -288,19 +340,30 @@ working (via thin re-export shims), so the existing gt4py test suite is a comple
 regression guard and each step is an independently mergeable, reviewable PR. The
 two invariants checked on every step are **(a)** the full test suite passes and
 **(b)** `tach check` passes. A guiding rule keeps reviews easy: **move first,
-simplify second** — a pure relocation behind a shim has a behaviour-empty diff;
-the simplification then lands as its own small, readable PR.
+simplify second** — a pure relocation behind a shim has a behaviour-empty diff; the
+simplification then lands as its own small, readable PR. The one deliberate
+exception is step 2: the `otf` cleanups are independent of the layering and pay for
+themselves immediately, so they land *before* the moves (and the relayering keeps
+them — they are not re-entrenched).
 
 1. **Land `tach`, permissively.** Add `tach` to the dev/CI dependencies and a
    `tach.toml` that declares the four layers and tags modules *at their current
    paths*, non-strict. CI now reports layer violations without blocking. No code
    moves. *(Config-only PR.)*
-2. **Create the `gt4py._internal` skeleton.** Add empty layer packages
+2. **Pay down the `otf` compilation-pipeline debt in place** — independent of the
+   layering, each its own PR, high-value items first: the one canonical
+   fingerprint; the `lower()` + `GT4PY_DUMP_STAGES` stage-inspection API;
+   `explain_cache_misses` logging; plain-code backend builders (drop `factory_boy`);
+   honest combinator typing; the argument-model split; and the naming pass
+   (`Backend → Toolchain`, `executor → compile_pipeline`). None blocks the others.
+   Done now, step 5 then relocates already-clean code. *(Maps to the simplification
+   items above; items 1–4 there are the ones to do first.)*
+3. **Create the `gt4py._internal` skeleton.** Add empty layer packages
    (`_internal/{utils,irtools,defs,infra,next}`) with `__init__.py` only. No moves
    yet; establishes the destination and the `tach` module paths.
-3. **Extract the `utils` layer.**
-   - 3a. Move `_core` → `_internal/defs`; leave `gt4py._core` as a re-export shim.
-   - 3b. Dissolve `eve`: move its general Python helpers (collection/iterator,
+4. **Extract the `utils` layer.**
+   - 4a. Move `_core` → `_internal/defs`; leave `gt4py._core` as a re-export shim.
+   - 4b. Dissolve `eve`: move its general Python helpers (collection/iterator,
      typing, exceptions, pattern matching) → `_internal/utils`, and its IR/AST
      toolkit (datamodels, `Node` base, visitors, trees, traits, codegen) →
      `_internal/irtools`. Because `eve` is **internal**, the public `gt4py.eve`
@@ -308,41 +371,42 @@ the simplification then lands as its own small, readable PR.
      shim re-exporting from the two new locations); update all in-tree `gt4py.eve`
      imports to the new paths. The split can land as two sub-PRs (`utils` first,
      then `irtools`, which depends on it).
-4. **Build the shared `infra` layer — one service per PR**, each leaving a
+5. **Build the shared `infra` layer — one service per PR**, each leaving a
    re-export shim at the old path *and* updating both `next` and `cartesian` to the
    new import form (this is the only change cartesian receives):
-   - 4a. **config** → `infra/config.py`; `next/config.py` and `cartesian/config.py`
-     become shims that re-export it. *(Simplification: unify into one module.)*
-   - 4b. **build / cache / bindings** from `next/otf/{compilation,binding}` →
-     `infra/{build,bindings,caching}`; shim `next/otf/...`. *(Simplification:
-     single hashing contract.)* Cartesian is repointed only at the shared build
-     toolchain and file-cache primitives; its higher-level `CachingStrategy` (which
-     caches `StencilObject`s, not compiled programs) is left as-is for now.
-   - 4c. **pipeline** from `next/otf/workflow.py` → `infra/pipeline.py`. *(Move as a
-     shim first; then the follow-up PR collapses the 5 classes to
-     `Workflow = Callable` + `Pipeline` + `compose`, and removes factory-boy.)*
-   - 4d. **allocators** (`storage` + `next/custom_layout_allocators`) →
+   - 5a. **config** → `infra/config.py`; `next/config.py` and `cartesian/config.py`
+     become shims that re-export it. *(Simplification 7: unify into one module.)*
+   - 5b. **build / cache / bindings** from `next/otf/{compilation,binding}` →
+     `infra/{build,bindings,caching}`; shim `next/otf/...`. The canonical
+     `fingerprint` from step 2 lands here. Cartesian is repointed only at the shared
+     build toolchain and file-cache primitives; its higher-level `CachingStrategy`
+     (which caches `StencilObject`s, not compiled programs) is left as-is for now.
+   - 5c. **pipeline** from `next/otf/workflow.py` → `infra/pipeline.py`; this is
+     where the honest-but-still-class-based combinators from step 2 collapse to
+     `Workflow = Callable` + `Pipeline` + `compose`.
+   - 5d. **allocators** (`storage` + `next/custom_layout_allocators`) →
      `infra/allocators` with a device registry; shim old paths; repoint
-     `gt4py.storage` constructors. *(Simplification: drop the Protocol/`TypeIs`
+     `gt4py.storage` constructors. *(Simplification 8: drop the Protocol/`TypeIs`
      zoo.)*
-   - 4e. **instrumentation** → `infra/instrumentation`; shim.
-5. **Move `gt4py.next` core under `_internal.next`, sub-package by sub-package**
+   - 5e. **instrumentation** → `infra/instrumentation`; shim. (The `on_stage`
+     observer from step 2 is the natural hook surface here.)
+6. **Move `gt4py.next` core under `_internal.next`, sub-package by sub-package**
    (`common` → `type_system` → `iterator` → `ffront` → `embedded` →
    `program_processors/codegens` → runners), each leaving a shim at the old path so
    nothing breaks mid-migration. The dependency direction is now enforceable:
-   codegen/runners (core) call `infra` build services; `infra` no longer imports IR
-   — the `backend ↔ ffront` cycle is broken here.
-6. **Turn `gt4py/next/__init__.py` into the real facade.** Replace its internals
+   codegen/runners (core) call `infra` build services via the sanctioned `lower()`
+   seam; `infra` no longer imports IR — the `backend ↔ ffront` cycle is broken here.
+7. **Turn `gt4py/next/__init__.py` into the real facade.** Replace its internals
    with explicit `from gt4py._internal.next... import x as x` re-exports plus a
    `__getattr__` deprecation shim. Same for `gt4py/__init__.py` and
    `gt4py/storage/__init__.py`. Public import names are unchanged.
-7. **Tighten and clean up.** Flip `tach` layers/modules to `strict` as each move
+8. **Tighten and clean up.** Flip `tach` layers/modules to `strict` as each move
    lands; mark the old-path shims `deprecated` in `tach` and on a removal timeline;
    delete shims once downstreams (e.g. icon4py) have migrated.
-8. **(Later, out of first scope) Fold in `gt4py.cartesian`.** Move its
+9. **(Later, out of first scope) Fold in `gt4py.cartesian`.** Move its
    frontend/IR/backends under `_internal/cartesian` (core layer) using the same
    facade-first pattern. No layer changes are needed — cartesian already consumes
-   the shared `infra` from step 4, so this is purely relocation + a `cartesian`
+   the shared `infra` from step 5, so this is purely relocation + a `cartesian`
    facade.
 
 ## Alternatives considered
@@ -360,8 +424,8 @@ the simplification then lands as its own small, readable PR.
 - **Restructure `cartesian` now vs defer it.** Deferred (this proposal). Doing
   cartesian's internal layering at the same time multiplies the diff and the risk
   for little gain, since cartesian is in maintenance. Updating only its *imports*
-  of the shared infra (step 4) is low-risk and is the prerequisite that lets it be
-  folded in later (step 8) without any layer rework.
+  of the shared infra (step 5) is low-risk and is the prerequisite that lets it be
+  folded in later (step 9) without any layer rework.
 - **Keep `eve` public vs dissolve it.** Dissolved into `_internal/utils` +
   `_internal/irtools` (name retired): it has no known out-of-tree users, and the
   package mixed two concerns (general helpers vs the IR/AST toolkit) that belong in
@@ -372,6 +436,16 @@ the simplification then lands as its own small, readable PR.
 - **Merge the cartesian and next pipelines.** Out of scope and risky. The layering
   *enables* sharing the infrastructure layer without forcing a core merge; that can
   proceed independently once the boundary exists.
+- **A full staged-compilation-API redesign instead of the in-place cleanups.** The
+  fuller alternative replaces the generic workflow framework with an explicit
+  staged API: typed stage objects (`Program → LoweredProgram → CompiledArtifact →
+  Executable`), a two-method toolchain protocol, one fingerprint, one artifact
+  store, and instrumentation at every stage boundary. It is attractive — and the
+  core/infra cut plus the `lower()` seam already point straight at it — but it is a
+  larger commitment. This proposal takes the incremental path: the cleanups
+  (steps 2/5) are valuable on their own and remain correct even if the staged
+  redesign is later pursued, so they are not wasted work either way. The staged API
+  is the natural follow-on once the boundary and a single fingerprint exist.
 - **Import Linter / pydeps / hand-rolled checks instead of `tach`.** Viable, but
   `tach`'s first-class *layers* feature expresses "higher-may-import-lower"
   directly and runs fast in CI. (Comparison in the appendix.)
@@ -387,11 +461,20 @@ the simplification then lands as its own small, readable PR.
   name in review.
 - **Is `ffront` semi-public?** Some advanced users build on FOAST/PAST stages.
   Decide whether a curated slice is promoted to public_api or stays core.
-- **Shim lifetime.** How long do the old-path re-export shims (steps 3–6) stay,
+- **Shim lifetime.** How long do the old-path re-export shims (steps 4–7) stay,
   and on what deprecation timeline? Driven mainly by downstream (icon4py) migration.
+- **How far to collapse the combinators.** The honest-typing cleanup (step 2) and
+  the full `Callable` + `Pipeline` collapse (step 5c) are two points on one path.
+  The conservative endpoint keeps `NamedStepSequence` as a documented runtime-typed
+  sequence; the aggressive one removes it. Decide whether the move goes all the way
+  or stops at "honest".
+- **ADR impact.** The factory-boy removal and the naming pass touch gt4py's ADR
+  0011 (the `otf` workflow framework) and ADR 0017 (toolchain configuration);
+  landing them implies a short successor ADR in the gt4py repo recording the change,
+  not only this garden note.
 - **Dependency hygiene.** Should `dace` and `factory` leave the core dependency
   set (→ optional / removed respectively)? The layering makes `dace` a pluggable
-  infra/core backend and removes `factory` entirely (item 2 above).
+  infra/core backend and removes `factory` entirely (simplification 4 above).
 - **Relation to in-flight `next` proposals — complementary, not conflicting.**
   These all assume the *public* `gt4py.next` import names, which the facade keeps
   stable, so this proposal is a substrate beneath them rather than a competitor:
