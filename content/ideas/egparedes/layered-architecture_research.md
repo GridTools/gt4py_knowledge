@@ -42,13 +42,13 @@ gt4py/
 ```
 
 Proposed layer assignment (see main proposal for the rule and for the
-**first-steps scope**: `gt4py.next` + shared infra/utils now; `eve` becomes
-internal; `gt4py.cartesian` is left as-is and only repointed at the shared infra,
-folded into the layers later):
+**first-steps scope**: `gt4py.next` + shared infra/utils now; the `eve` package is
+dissolved into `utils` + `irtools` (name retired); `gt4py.cartesian` is left as-is
+and only repointed at the shared infra, folded into the layers later):
 
 | Layer | Gets |
 | --- | --- |
-| utils | `eve` (now **internal** — IR-tree framework, name not preserved), `_core` (→ `defs`), pure-python helpers |
+| utils | `utils` (general Python helpers, from `eve`) and `irtools` (IR/AST toolkit, from `eve`: datamodels, `Node` base, visitors, trees, traits, codegen); `defs` (today's `_core`). The `eve` name is **retired**. |
 | infrastructure | `next/otf/{compilation,binding}`, `next/otf/workflow`+`toolchain`, `config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` — shared by next and cartesian |
 | core | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, runner orchestration. *(cartesian's frontend+IR+backends join here in the later step.)* |
 | public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (internal) |
@@ -157,8 +157,8 @@ keep one Protocol for the allocator call signature if useful, drop the guards.
 ### 3.5 Two hashing paths for the same data
 
 `otf/stages.py` has `compilation_hash(...)` built on `hash((...))` *and*
-`fingerprint_compilable_program(...)` built on `content_hash((...))` (an eve
-util) — for the same compilable program, with no documented contract for which to
+`fingerprint_compilable_program(...)` built on `content_hash((...))` (today an
+`eve` util; lands in `_internal/utils`) — for the same compilable program, with no documented contract for which to
 use when. **Simplification.** One function, one strategy, documented.
 
 ### 3.6 Type-alias chains in `otf/definitions.py`
@@ -277,8 +277,8 @@ Conventions worth copying:
    ```
 
 4. **Domain-grouped public submodules** (`jax.numpy`, `jax.lax`, `jax.random`)
-   over thin `_src` implementations — the analogue of `gt4py.next` /
-   `gt4py.cartesian` facades over `gt4py._internal.{next,cartesian}`.
+   over thin `_src` implementations — the analogue of the `gt4py.next` facade over
+   `gt4py._internal.next` (with `gt4py.cartesian` joining the pattern later).
 5. **Concrete types at the boundary**; the generic/variance machinery (where it
    exists) stays internal. This is the principle behind infrastructure
    simplifications §3.1, §3.2 and §3.6.
