@@ -149,12 +149,22 @@ and runs cmake. Split it:
 - **source text → loadable module** (build, bindings, cache, the generic
   pipeline that chains steps) is **infrastructure**: it manipulates strings,
   files, and callables and never imports an IR node.
-- A **runner** is **core**: it holds the IR + arguments and *calls* the
-  infrastructure build service.
+- A **runner** is **core**: it drives compilation and then executes the result.
+  The per-backend object that bundles the compile pipeline (today `Backend`,
+  renamed `Toolchain` in the cleanup below) is likewise **core**: it *composes*
+  core codegen steps with infra build/pipeline/allocator services. Because that
+  composition happens in core and the generic `Pipeline` only ever receives
+  callables, **infrastructure can host the pipeline without importing any core
+  step** — which is the whole point of the cut.
 
-This single cut dissolves the `backend ↔ ffront` cycle (infrastructure stops
-depending on the DSL) and makes the cartesian/next *infrastructure* genuinely
-shareable without forcing their *cores* to merge.
+This cut removes the dependency that runs *through* the infrastructure:
+`ffront`'s import of `otf` becomes an import of `infra` (downward, legal), and the
+generic build/pipeline services stop importing any IR, so **infrastructure no
+longer depends on the DSL**. The residual `backend ↔ ffront` coupling becomes a
+*core-internal* concern (both live in `_internal.next`), addressed by the
+sanctioned `lower()` boundary (below) rather than by the layer rule alone. The cut
+also makes the cartesian/next *infrastructure* genuinely shareable without forcing
+their *cores* to merge.
 
 ### Public/internal decoupling (`_internal`, the JAX `_src` pattern)
 
@@ -237,8 +247,9 @@ path = "gt4py._internal.infra"
 layer = "infrastructure"
 
 # --- utils: domain-agnostic foundations (today's eve, split + renamed) ---
-# Cross-layer (downward) imports need no declaration; same-layer ones do, so the
-# one intra-utils edge (irtools -> utils) is named explicitly.
+# Cross-layer (downward) imports need no declaration; same-layer ones do, so any
+# intra-utils edge is named explicitly (here just irtools -> utils; add others,
+# e.g. defs -> utils, only if the move turns one up).
 [[modules]]
 path = "gt4py._internal.utils"      # general Python helpers
 layer = "utils"
@@ -324,8 +335,9 @@ and any deeper redesign reuse, so they never need re-doing.
    `get(device)`), keeping at most one Protocol for the call signature.
 9. **A naming pass** *(small)*. Align the vocabulary with the (eventual) ADR: the
    per-backend object `Backend → Toolchain`, `executor → compile_pipeline`, and the
-   docstring stage names. This proposal uses **toolchain** for that per-backend
-   compile-pipeline object from here on.
+   docstring stage names. (Throughout this proposal, *toolchain* is that per-backend
+   compile-pipeline object, while a *runner* is the core component that drives a
+   toolchain to compile and then execute a program.)
 
 None of these change behavior or performance; they remove indirection the layering
 makes unnecessary (e.g. the generic variance existed largely to thread one pipeline
@@ -378,7 +390,7 @@ them — they are not re-entrenched).
      become shims that re-export it. *(Simplification 7: unify into one module.)*
    - 5b. **build / cache / bindings** from `next/otf/{compilation,binding}` →
      `infra/{build,bindings,caching}`; shim `next/otf/...`. The canonical
-     `fingerprint` from step 2 lands here. Cartesian is repointed only at the shared
+     `fingerprint` built in place in step 2 moves here. Cartesian is repointed only at the shared
      build toolchain and file-cache primitives; its higher-level `CachingStrategy`
      (which caches `StencilObject`s, not compiled programs) is left as-is for now.
    - 5c. **pipeline** from `next/otf/workflow.py` → `infra/pipeline.py`; this is
@@ -395,7 +407,8 @@ them — they are not re-entrenched).
    `program_processors/codegens` → runners), each leaving a shim at the old path so
    nothing breaks mid-migration. The dependency direction is now enforceable:
    codegen/runners (core) call `infra` build services via the sanctioned `lower()`
-   seam; `infra` no longer imports IR — the `backend ↔ ffront` cycle is broken here.
+   seam; `infra` imports no IR, so the DSL→infrastructure dependency is gone and any
+   residual `backend ↔ ffront` coupling is contained within the core layer.
 7. **Turn `gt4py/next/__init__.py` into the real facade.** Replace its internals
    with explicit `from gt4py._internal.next... import x as x` re-exports plus a
    `__getattr__` deprecation shim. Same for `gt4py/__init__.py` and
@@ -461,6 +474,11 @@ them — they are not re-entrenched).
   name in review.
 - **Is `ffront` semi-public?** Some advanced users build on FOAST/PAST stages.
   Decide whether a curated slice is promoted to public_api or stays core.
+- **Type-system consolidation is enabled, not done.** The four overlapping type
+  systems are *placed* by the layering (`_core/definitions` → `defs`/utils;
+  `next/type_system` and `iterator/type_system` → core; `cartesian/type_hints`
+  stays with cartesian) but not *merged*. The shared `utils`/`defs` floor makes a
+  later consolidation possible; it is deliberately out of scope for the first steps.
 - **Shim lifetime.** How long do the old-path re-export shims (steps 4–7) stay,
   and on what deprecation timeline? Driven mainly by downstream (icon4py) migration.
 - **How far to collapse the combinators.** The honest-typing cleanup (step 2) and
