@@ -398,6 +398,10 @@ These are independently landable, each PR-sized, and valuable on their own:
 
 ## 6. Staged implementation plan
 
+> The concrete PR-by-PR landing sequence (staggered PRs, with status) is tracked
+> in [[ideas/havogt/dtype-generic-fields_implementation-plan|the implementation
+> roadmap appendix]].
+
 **Stage 1 — minimal dtype generics: direct operator calls + embedded.**
 
 - `type_translation.from_type_hint`: a branch for
