@@ -181,7 +181,8 @@ utils.
   cache) with domain-agnostic *generic Python* (`irtools`, helpers) — different
   audiences, different churn.
 - **More, as global layers, is premature.** The tempting refinement splits `core`
-  into a stack (`runners → codegens → frontend → IR → domain`). But `tach` layers
+  into a stack: `runners` on top, the *parallel* `frontend` and `codegens` over the
+  `IR`, over the `domain` model at the base. But `tach` layers
   are a **total order**, and `gt4py.next`'s core still has cycles (the
   `backend ↔ ffront` one, and likely `type_system ↔ common`, `ffront ↔ iterator`).
   A finer *layer* split would fail `tach check` until those are refactored — out of
@@ -318,11 +319,12 @@ and any deeper redesign reuse, so they never need re-doing.
    translation cache, the executor cache step, and (via a `fingerprint → build-dir`
    index) the build cache, so warm starts skip translation entirely. Replace the
    `id()`-based offset-provider hashing with content hashing of the provider *type*
-   plus an identity fast path. Lands in `infra/caching` — and so must be
-   **domain-agnostic**: core extracts the type descriptors (arg types,
-   offset-provider types) and passes plain hashable data down; `infra/caching`
-   hashes data, never importing `common`/connectivity types (otherwise it would be
-   an illegal infra→core edge).
+   plus an identity fast path. The contract is **split to stay domain-agnostic**:
+   the content-hashing primitive and the key format live in `infra/caching` and
+   operate on **plain hashable data**, while a thin *core* helper turns a
+   `program_def` into that data (the GTIR fingerprint, arg/offset-provider type
+   descriptors, config, version). So `infra/caching` never imports `common`/IR types
+   — that would be an illegal infra→core edge.
 2. **A sanctioned stage-inspection / dump API** *(small, high value)*. Add an
    optional `on_stage(name, artifact)` observer to the pipeline and a
    `GT4PY_DUMP_STAGES=<dir>` switch that writes each intermediate artifact (GTIR
@@ -331,7 +333,9 @@ and any deeper redesign reuse, so they never need re-doing.
    `Toolchain.lower(definition, compile_time_args) -> stage artifacts` — so
    consumers stop duck-typed-unwrapping pipeline internals. This sanctioned
    `lower()` boundary is exactly the **core ↔ infrastructure seam** (IR → source vs
-   source → module): it improves observability *and* realizes the layering.
+   source → module): it improves observability *and* realizes the layering. (The
+   observer treats each artifact opaquely — the artifact renders/serializes itself —
+   so `infra/instrumentation` writes bytes without importing IR types.)
 3. **`explain_cache_misses` logging** *(small)*. Under a debug flag, each cache
    layer logs its key, hit/miss, and the first differing key component — turning
    "why did this recompile?" into a one-line answer.
@@ -429,8 +433,9 @@ them — they are not re-entrenched).
    - 5a. **config** → `infra/config.py`; `next/config.py` and `cartesian/config.py`
      become shims that re-export it. *(Simplification 7: unify into one module.)*
    - 5b. **build / cache / bindings** from `next/otf/{compilation,binding}` →
-     `infra/{build,bindings,caching}`; shim `next/otf/...`. The canonical
-     `fingerprint` built in place in step 2 moves here. Cartesian is repointed only at the shared
+     `infra/{build,bindings,caching}`; shim `next/otf/...`. The fingerprint's
+     hashing primitive from step 2 moves here; its `program_def → data` extraction
+     stays in core. Cartesian is repointed only at the shared
      build toolchain and file-cache primitives; its higher-level `CachingStrategy`
      (which caches `StencilObject`s, not compiled programs) is left as-is for now.
    - 5c. **pipeline** from `next/otf/workflow.py` → `infra/pipeline.py`; this is

@@ -183,10 +183,12 @@ used when. `otf/stages.py` alone has `compilation_hash(...)` built on `hash((...
 *and* `fingerprint_compilable_program(...)` built on `content_hash((...))` (today an
 `eve` util; lands in `_internal/utils`) for the *same* compilable program; offset
 providers are hashed by `id()` in at least one path. **Simplification.** One
-canonical content-based `fingerprint(program_def) -> str` (GTIR fingerprint, arg
+canonical content-based fingerprint (GTIR fingerprint, arg
 types, offset-provider *types*, backend-relevant config, gt4py version), shared by
 the translation cache, the executor step, and — via a `fingerprint → build-dir`
-index — the build cache (so warm starts skip translation). Replace `id()`-based
+index — the build cache (so warm starts skip translation). The hashing primitive
+lives in infra and takes plain data; a core helper does the `program_def →
+descriptor` extraction (see the infra→core back-edge note in §2). Replace `id()`-based
 offset-provider hashing with content hashing of the provider type + an identity
 fast path. Add an `explain_cache_misses` debug flag: each layer logs its key,
 hit/miss, and the first differing component.
