@@ -64,6 +64,15 @@ and only repointed at the shared infra, folded into the layers later):
   steps (need `iterator.ir`) and DSL-agnostic build/cache/binding plumbing. As one
   package it can never be cleanly placed; as two (`codegens` in core,
   `infra/build`+`infra/bindings`+`infra/pipeline`) it can.
+- **Latent infra→core back-edges via the domain model.** Two would-be
+  infrastructure services reference *core* vocabulary today:
+  `FieldBufferAllocatorProtocol.__gt_allocate__(domain: common.Domain, …)` and the
+  cache fingerprint over offset-provider/connectivity *types*. Moving them to
+  `infra` as-is would reintroduce an illegal infra→core import. The fix (and the
+  reason a "domain" layer beneath infra is wrong) is to make these services
+  domain-agnostic — operate on shape/device/descriptor data that core supplies —
+  not to push the DSL vocabulary downward. (See main proposal, "Why four layers"
+  and simplification items 1 and 8.)
 - **Backends are discovered by import, not registered.** `gtfn_cpu`/`gtfn_gpu`
   are hard-wired in `next/__init__`; the dace runner is imported lazily inside
   `decorator.py`. No central registry; adding a backend means editing `__init__`.

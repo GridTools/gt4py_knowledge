@@ -166,6 +166,36 @@ sanctioned `lower()` boundary (below) rather than by the layer rule alone. The c
 also makes the cartesian/next *infrastructure* genuinely shareable without forcing
 their *cores* to merge.
 
+### Why four layers (not more, not fewer)
+
+Four is deliberate, not inherited. It captures the two highest-value boundaries —
+**public_api ↔ core** (the `_internal` decoupling) and **core ↔ infrastructure**
+(the cut that takes the DSL→build dependency out and makes infra shareable) — with
+`utils` as the uncontroversial floor. It also matches the reference: JAX is
+effectively public (`jax/`) → core/`_src` transforms → lowering/compilation →
+utils.
+
+- **Fewer drops a boundary that is doing work.** Merging public_api into core
+  defeats the decoupling outright; merging infrastructure into utils loses the
+  core/infra cut *and* conflates DSL-agnostic gt4py *services* (build, allocators,
+  cache) with domain-agnostic *generic Python* (`irtools`, helpers) — different
+  audiences, different churn.
+- **More, as global layers, is premature.** The tempting refinement splits `core`
+  into a stack (`runners → codegens → frontend → IR → domain`). But `tach` layers
+  are a **total order**, and `gt4py.next`'s core still has cycles (the
+  `backend ↔ ffront` one, and likely `type_system ↔ common`, `ffront ↔ iterator`).
+  A finer *layer* split would fail `tach check` until those are refactored — out of
+  first-steps scope. Express that finer ordering instead as per-module `depends_on`
+  edges *within* the `core` layer (`codegens → iterator`, `runners → codegens,
+  infra`, …) and promote a sub-stack to a real layer only once its cycles are paid
+  down.
+- **A fifth "domain-model" layer below infrastructure would be wrong.** It is
+  tempting because a few infra services touch domain vocabulary (see below), but
+  the domain model (`Field`/`Dimension`/`Domain`/`Connectivity`) *is* DSL knowledge
+  — it cannot sit beneath a layer defined as DSL-agnostic. The right fix is the
+  reverse: keep the domain model in core and make those infra services
+  domain-agnostic (next section, items 1 and 8).
+
 ### Public/internal decoupling (`_internal`, the JAX `_src` pattern)
 
 Implementation moves under a private root; the public package re-exports from it
@@ -288,7 +318,11 @@ and any deeper redesign reuse, so they never need re-doing.
    translation cache, the executor cache step, and (via a `fingerprint → build-dir`
    index) the build cache, so warm starts skip translation entirely. Replace the
    `id()`-based offset-provider hashing with content hashing of the provider *type*
-   plus an identity fast path. Lands in `infra/caching`.
+   plus an identity fast path. Lands in `infra/caching` — and so must be
+   **domain-agnostic**: core extracts the type descriptors (arg types,
+   offset-provider types) and passes plain hashable data down; `infra/caching`
+   hashes data, never importing `common`/connectivity types (otherwise it would be
+   an illegal infra→core edge).
 2. **A sanctioned stage-inspection / dump API** *(small, high value)*. Add an
    optional `on_stage(name, artifact)` observer to the pipeline and a
    `GT4PY_DUMP_STAGES=<dir>` switch that writes each intermediate artifact (GTIR
@@ -332,7 +366,13 @@ and any deeper redesign reuse, so they never need re-doing.
 8. **An allocator registry, not a Protocol zoo** *(small)*. Replace the six
    allocator `Protocol`s and ~ten `TypeIs` guards in `custom_layout_allocators.py`
    with one registry keyed by device type (`register(device, allocator)` /
-   `get(device)`), keeping at most one Protocol for the call signature.
+   `get(device)`), keeping at most one Protocol for the call signature. Moving this
+   into `infra` requires making it **domain-agnostic**: today
+   `__gt_allocate__(domain: common.Domain, …)` takes core vocabulary, which would
+   be an illegal infra→core edge. Have the infra allocator take a shape /
+   aligned-index / device (defs-level data) and let **core** do the `Domain → shape`
+   translation before calling it — dumb generic allocator below, domain-aware
+   wrapper above (the JAX buffer-vs-array split).
 9. **A naming pass** *(small)*. Align the vocabulary with the (eventual) ADR: the
    per-backend object `Backend → Toolchain`, `executor → compile_pipeline`, and the
    docstring stage names. (Throughout this proposal, *toolchain* is that per-backend
@@ -481,6 +521,13 @@ them — they are not re-entrenched).
   later consolidation possible; it is deliberately out of scope for the first steps.
 - **Shim lifetime.** How long do the old-path re-export shims (steps 4–7) stay,
   and on what deprecation timeline? Driven mainly by downstream (icon4py) migration.
+- **When to promote a `core` sub-layer.** The finer intra-core ordering
+  (`domain → IR → frontend → codegens → runners`) is carried as per-module
+  `depends_on` edges within the single `core` layer for now, because the existing
+  core cycles (`backend ↔ ffront`, etc.) would make a finer *tach layer* split fail.
+  Once those cycles are paid down (a natural step-8 activity), decide whether to
+  promote a sub-stack — most plausibly the `domain` model or the `codegens` — to a
+  real layer.
 - **How far to collapse the combinators.** The honest-typing cleanup (step 2) and
   the full `Callable` + `Pipeline` collapse (step 5c) are two points on one path.
   The conservative endpoint keeps `NamedStepSequence` as a documented runtime-typed
