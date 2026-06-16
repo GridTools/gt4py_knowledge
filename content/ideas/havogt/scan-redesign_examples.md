@@ -123,12 +123,22 @@ def pressure_step(p_interface: float, dz_rho_g: float) -> tuple[float, tuple[flo
 _, (pressure, pressure_ifc) = pressure_step(dz_rho_g, init=surface_pressure)
 ```
 
-With `include_initial=True` the surface value itself appears in the output —
-n cell inputs, n+1 interface outputs, "the value at the boundary *is* the
-init" (the exclusive/inclusive duality, research §B.2):
+With `include_initial=True` the surface value itself is emitted — n cell
+increments, n+1 interface values, "the value at the boundary *is* the init"
+(the exclusive/inclusive duality, research §B.2). `include_initial` is
+restricted to carry-is-output / projector scans (proposal §3.3.2), so it is
+shown here on the interface pressure alone (the carry); a full-level output
+like `p_full` above would be derived separately. The n+1th level lives on the
+interface (half-level) grid — its modelling waits on staggering (proposal
+Dependency note, open question 2):
 
 ```python
-_, p_ifc = pressure_step(dz_rho_g, init=surface_pressure, include_initial=True)
+@gtx.scan(axis=KDim, forward=False)  # carry-is-output: interface pressure
+def p_ifc_step(p_interface: float, dz_rho_g: float) -> float:
+    return p_interface * exp(...)  # interface above
+
+
+p_ifc = p_ifc_step(dz_rho_g, init=surface_pressure, include_initial=True)
 ```
 
 ## 4. Thomas algorithm: don't write it at all
@@ -413,8 +423,8 @@ What this exercises beyond the earlier examples:
   `gtx.lib.tridiagonal_solve`, carries this case (§3.5).
 - **Opposite-direction pair**: `ff` is materialized between the two scans,
   exactly as the GTScript 3D temporary is today — no regression, and a
-  concrete instance of the fusion question (proposal §5.5: opposing
-  directions are "attempted", not guaranteed).
+  concrete instance of the fusion question (proposal §5, open question 5:
+  opposing directions are "attempted", not guaranteed).
 
 ## 8. Tropopause inversion + mixing length (PHYEX)
 

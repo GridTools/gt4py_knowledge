@@ -13,12 +13,23 @@ created: 2026-06-11
 > toolchain obligation.
 
 - **Status**: draft, for discussion
-- **Updated**: 2026-06-12 (K-local views, inclusive/exclusive scans,
+- **In-progress markers**: **NEEDS REFINEMENT** = examined in the current
+  iteration, design still open; **NEEDS REVIEW** = section not yet revisited
+  this iteration.
+- **Updated**: 2026-06-15 (K-local views, inclusive/exclusive scans,
   icon4py muphys evidence, scan fusion; PMAP cartesian evidence: anchored
   index conditions, partition-based peeling, guard-refined extents,
   `history` carries; vertical reductions and the fold form,
   physics_patterns evidence: level searches, variable-depth masks,
-  `gtx.index`, SHiELD scatter boundary)
+  `gtx.index`, SHiELD scatter boundary; §3.1 two output models — JAX
+  free-output (A) vs carry+projector (B), fold as projector-less; §3.1
+  combinator spelling alongside the decorator; §4.1 scalar-vs-slice reopened
+  as a variant — elemental `map`, JAX-lowering performance question;
+  staggering noted as a finalization dependency for boundary conditions;
+  §3.2 reframed vertical-forward / horizontal-backward with a fixed-anchor
+  (vertical non-covariance) rule and tail-pruning as optimization; §3.3.2
+  `include_initial` scoped to projector output, its N+1 domain deferred to
+  staggering)
 - **Companion documents**:
   [[ideas/havogt/scan-redesign_research|research notes]] (detailed analysis
   of the current implementation, prior art with sources, and the
@@ -27,6 +38,15 @@ created: 2026-06-11
   examples, including the muphys decomposition, the PMAP stride-2
   tridiagonal solve, the physics_patterns level-search and variable-depth
   patterns, and the sedimentation reference implementations)
+- **Dependency (staggering)**: the boundary-condition and output design here
+  must be finalized *after* the staggering / half-level model
+  ([[ideas/havogt/dimension-generic-fields|generic dimensions]], `Staggered[D]`).
+  Staggering directly shapes scan boundaries — the n→n+1 cell-to-interface
+  emission of `include_initial` (§3.3.2), the `KDim.start`/`KDim.stop` anchors
+  across staggered grids (§3.3.1), and range deduction when inputs are
+  cell-centred and outputs live on interfaces (§3.2, open question 2). Do not
+  lock the boundary-condition design until the staggering model is settled.
+  **NEEDS REFINEMENT** (blocked on staggering).
 
 Why-statement: In the context of vertical recurrences in weather and climate
 models (vertical integrals, tridiagonal solvers, sedimentation), facing an
@@ -40,10 +60,12 @@ scanned inputs presented as *K-local views* (relative level access without
 delay-line carries), plus a *vertical window* construct that covers
 scan + sub-reduce algorithms, fixed-op *vertical reductions* (column
 integrals, level searches) whose general form is the scan's final carry,
-and scan fusion as a toolchain obligation. We
-considered keeping the scalar body, whole-column kernels, and GTScript-style
-interval dispatch, and we accept that data-dependent per-column control flow
-inside the scan body must be expressed with `where` instead of Python `if`.
+and scan fusion as a toolchain obligation. We reject
+whole-column kernels and GTScript-style interval dispatch for v1, but keep the
+scalar-element body as an open variant (a `scalar_operator`, promotable
+elementally with `map`): whether data-dependent per-column control flow uses
+`where` (slice body) or native Python `if` (scalar body) is left open for
+discussion (§4.1).
 
 ## 1. Background: the current scan and its problems
 
@@ -119,10 +141,11 @@ companion document, §A):
   in the carry tuple (see companion document §C).
 
 - **P6 — Production scans degenerate into one mega-operator.** The icon4py
-  muphys graupel scheme (companion document §A.7) fuses *five* logically
-  independent recurrences (rain/snow/ice/graupel sedimentation + temperature)
-  into one `scan_operator` with a 21-component carry, because separate scans
-  can neither share per-level intermediates nor be relied upon to fuse. Of
+  muphys graupel scheme (companion document §A.7) fuses *five* recurrences
+  (four mutually independent species sedimentations — rain/snow/ice/graupel —
+  plus a temperature/energy recurrence coupled to them only through same-level
+  outputs) into one `scan_operator` with a 21-component carry, because separate
+  scans can neither share per-level intermediates nor be relied upon to fuse. Of
   those 21 components, 2 are pass-through output channels and one (`rho`) is
   a *delay line* — carried only because the body cannot read an input at
   k−1; a lookahead input is precomputed outside as
@@ -174,7 +197,12 @@ Non-goals (explicitly out of scope for the first iteration, see §4.7–4.8):
   windows cover the known use cases on GPU-friendly terms.
 - Distributed scans. The vertical axis is never distributed in our models.
 - Horizontal or global reductions (mesh-wide sums, inner products,
-  distributed-memory reductions). Only the vertical axis is in scope here.
+  distributed-memory reductions). Only the vertical axis is in scope here: the
+  vertical is node-local (never MPI-distributed in our models) whereas the
+  horizontal is distributed, so restricting reductions to the vertical keeps
+  them collective-free and sidesteps distributed-reduction semantics entirely.
+  Rejecting a reduction over a distributed axis is a required guard, left
+  implicit here.
 
 ## 3. Proposed design
 
@@ -183,7 +211,8 @@ Non-goals (explicitly out of scope for the first iteration, see §4.7–4.8):
 The scan body is a function from *level slices* to *level slices*. A level
 slice is a field over the horizontal domain of the call site (the K dimension
 removed). The body takes the carry and one slice per scanned input, and
-returns the new carry and the per-level output:
+returns the new carry plus — depending on the output model below — a per-level
+output:
 
 ```
 scan body:  (carry, x_k, ...) -> (carry', y_k)
@@ -193,15 +222,59 @@ scan call:  (xs..., init)     -> (final_carry, ys)
 This is `jax.lax.scan` semantics (the de-facto ecosystem standard, also
 adopted by PyTorch's higher-order `scan` and PyTorch/XLA — research §B.1,
 §B.3), with the scan axis being the declared vertical dimension instead of the
-leading array axis. Strawman syntax:
+leading array axis.
+
+**Two output models.** How the per-level output relates to the carry has two
+formulations; *both are in scope* and a call site chooses one.
+
+- **(A) Free output (`jax.lax.scan` form).** The body returns `(carry', y_k)`
+  and may compute `y_k` from anything in scope — the new carry *and* the level
+  inputs. Maximally expressive: an output that needs a level input is never
+  forced through the carry. Strawman:
+
+  ```python
+  @gtx.scan(axis=KDim, forward=True)
+  def cumsum_step(carry: float, x: float) -> tuple[float, float]:
+      s = carry + x
+      return s, s  # (new carry, output at this level)
+  ```
+
+- **(B) Projected output (carry + projector).** The body returns only the new
+  carry, `(carry, x) -> carry'`; a *projector* `carry' -> y_k` declares what to
+  write at each level. One mechanism, three cases: the **identity** projector
+  (the default) is today's carry-is-output `scan_operator` — the migration
+  target; a **non-identity** projector writes a function or part of the carry
+  (carry richer than output, e.g. carry `(running_sum, running_prod)` writing
+  only the sum); and **no output at all** is the *fold* (only the final carry
+  returned, §3.9). The projector sees only the carry, so an output depending on
+  a level input must be threaded through the carry — the one expressiveness gap
+  versus (A). Strawman:
+
+  ```python
+  @gtx.scan(axis=KDim, forward=True)  # default identity projector → carry is the output
+  def cumsum_step(carry: float, x: float) -> float:
+      return carry + x
+  ```
+
+(B) is the **minimal delta from today's `scan_operator`** and the IR-honest
+shape: the per-level write is a pure function of the carry, which any backend
+column loop emits directly. On the now-primary DaCe backend a scan already
+lowers to a sequential loop region over the vertical dimension
+(`gtir_to_sdfg_scan.py` — whose GTIR scan representation is itself slated to
+change to enable scan optimizations), so the projector is just the write
+statement inside that loop and the fold is the same loop with no write; GTFN
+expresses the identical shape as a `scan_pass` projector (`column_stage.hpp`).
+(A) earns its keep when an output genuinely depends on a level input; in the
+surveyed cases (cumsum, the Thomas sweep, even muphys — whose per-level
+`(x, p)` outputs *are* carry components) (B)'s carry projection already
+suffices. Carry/output separation in either model removes P3's dummy outputs
+and makes the final carry (surface fluxes) retrievable. How the projector and
+the fold case are spelled — decorator argument vs a call-site combinator — is
+an open question (§5).
+
+A field operator consuming the scan (model (A) shown):
 
 ```python
-@gtx.scan(axis=KDim, forward=True)
-def cumsum_step(carry: float, x: float) -> tuple[float, float]:
-    s = carry + x
-    return s, s  # (new carry, output at this level)
-
-
 @gtx.field_operator
 def vertical_integral(
     x: gtx.Field[gtx.Dims[Cell, KDim], float],
@@ -211,6 +284,29 @@ def vertical_integral(
     # `integral`: Field[[Cell, KDim], float]
     return integral
 ```
+
+**Spelling: decorator and combinator.** The ITIR scan builtin is *already* a
+higher-order function — `scan(step, forward, init)` applied to the args, with
+the axis handled at the program level (`foast_to_gtir.py`). The `@gtx.scan`
+decorator above is sugar over it; the same shape exposed as a **call-site
+combinator** is where the projector, the fold, and the direction naturally
+live:
+
+```python
+final_carry, ys = gtx.scan(step, axis=KDim, forward=True, project=proj)(xs..., init=...)
+final_carry      = gtx.fold(step, axis=KDim, forward=True)(xs..., init=...)
+```
+
+Both spellings are kept (the decorator stays). The step is an ordinary traced
+operator — a slice `field_operator` or a scalar `scalar_operator` (§4.1) — so
+the same kernel is reusable outside a scan. `gtx.fold` is the general
+sequential reduction underlying §3.9; like the fixed-op reductions, its
+contract must *not* foreclose a future parallel (`associative`) scan/reduce
+lowering (§4.7). Picking model (A) vs (B), and how `project=`/`fold` are
+spelled, is open question 4.
+
+> **NEEDS REFINEMENT** — output model (A) vs (B) and the `project=`/`fold` +
+> decorator-vs-combinator spelling (open question 4).
 
 Semantics and type rules:
 
@@ -228,15 +324,16 @@ Semantics and type rules:
   index only* get special treatment (§3.3).
 - **Backward scans** keep the `forward=` flag; outputs stay index-aligned
   with inputs regardless of direction (as in `lax.scan(reverse=True)`).
-- **Simple form (sugar).** A body that returns only the carry
-  (`(carry, x) -> carry`) is interpreted as `y = carry'`, and the call returns
-  just `ys`. This is the migration target for today's `scan_operator` and
-  covers the dominant carry-is-output case without boilerplate.
-- **Fold form (the dual).** When only the final carry is consumed and the
-  per-level output is dead, the toolchain must not materialize `ys` — the
-  mirror image of P3's dummy outputs. A reduction-only scan (research §A.9
-  tropopause argmin) writes k-less fields. This is the general sequential
-  reduction — order-pinned, arbitrary combine — underlying §3.9.
+- **Simple / carry-is-output form.** Model (B) with the identity projector —
+  the migration target for today's `scan_operator`, covering the dominant
+  carry-is-output case without a tuple return.
+- **Fold form (the dual).** Model (B) with *no* output: nothing is materialized
+  per level (the mirror image of P3's dummy outputs), only the final carry is
+  returned — a reduction-only scan writes k-less fields (research §A.9
+  tropopause argmin). This is the general sequential reduction — order-pinned,
+  arbitrary combine — underlying §3.9. The discriminator is the projector
+  (identity / non-identity / absent), not the body's return annotation, so
+  simple and fold are no longer two readings of one `-> carry` signature.
 
 #### Typing of body arguments, and access to neighbouring levels
 
@@ -331,43 +428,76 @@ def w_fwd_sweep(
 
 No `first_level` flag, no dummy output, no per-iteration branch.
 
-### 3.2 Scan range: deduced from inputs, explicitly overridable
+### 3.2 Scan range: vertical flows forward, horizontal stays backward
 
-The scan range is the intersection of the K-ranges of the scanned inputs —
-the same rule as for any other field expression — optionally overridden:
+Domain inference in `next` is *backward* — the requested output domain
+back-propagates to the inputs (`infer_domain.py`); the scan today even pulls
+its vertical range out of the output access domain (`_extract_vertical_dims`),
+the ITIR-level twin of embedded's `closure_column_range`. That is sound only
+for *translation-covariant* operations, where shifting the output request
+equals shifting the input accesses. A scan is translation-covariant in its
+parallel dimensions but **not** in the scan dimension: moving the seed
+re-seeds the recurrence and changes every level downstream of it. The redesign
+therefore splits the scan's domain:
+
+- **Horizontal — backward, as usual.** A consumer's horizontal-shift request
+  propagates into the producer exactly as for any field op.
+- **Vertical — forward and anchored.** The vertical range is an intrinsic
+  property of the scan (its K-bearing inputs, or an explicit `k_range`), never
+  back-inferred from consumers:
 
 ```python
 _, (z_q_res, w_res) = w_fwd_sweep(
     z_q, w, z_a, z_b, z_c, init=(z_q0, w0), k_range=KDim[1:]
-)  # strawman override syntax
+)  # strawman override syntax (k_range spelling: open question 3)
 ```
 
-- If all inputs carry K, no annotation is needed: the range is where the
-  inputs are defined. This removes the context-variable plumbing and the
-  output-domain back-inference entirely.
-- A scan with no K-bearing input (pure recurrence, `xs=None` in JAX terms)
-  *must* specify the range explicitly.
-- The program-level `domain=` argument restricts the *output* as today; the
-  scan range itself no longer depends on it. Restricting the output below the
-  scan range is allowed (compute, then write a sub-range); requesting output
-  outside the scan range is an error.
-- Reads guarded by index conditionals (§3.3) contribute *per-region*
-  requirements instead of shrinking the global intersection: an input
-  defined on a sub-range of the scan range is legal as long as every
-  region's reads stay within its domain. The production case is the PMAP
-  back substitution (research §A.8): a full-column scan consuming a
-  temporary defined on one level less, well-formed because the last-level
-  branch reads it only at offset −2. The formal deduction rule (anchors
-  resolve against the range being deduced — a fixpoint) is open question 9;
-  the explicit `k_range` override sidesteps it case by case.
+Rules:
+
+- **Inputs set the available range; output and direction set what is needed.**
+  Where the K-bearing inputs are defined is the *upper bound*. The carry
+  direction plus the requested output give the *needed* range: a forward scan
+  writing up to level `b` must compute from the seeded end up to `b` — it
+  cannot skip the prefix (the carry threads through it) but can skip the suffix
+  beyond `b` (mirror for backward). The semantics is the predictable one — scan
+  the available input range, write the requested output sub-range; pruning the
+  unneeded suffix is a *toolchain optimization*, valid only when the final
+  carry and the pruned outputs are dead.
+- **The seed anchor is fixed and immovable.** Set by the scan range / `init`,
+  it is invariant under downstream domain requests. A downstream *vertical*
+  shift of the scan output (`scan_out(Koff[-1])`) is a read on the materialized
+  K-range — a **vertical fusion barrier**, never a range expansion; it must not
+  move the anchor. A request below the anchor (forward) or above it (backward)
+  is an out-of-range read, handled by the normal out-of-range rules (error /
+  skip-mask), never by extending the scan. Unlike ordinary fields you cannot
+  retroactively obtain low-end levels by shifting downstream — the scan range
+  must be sized up front to cover every level a consumer needs. (This is the
+  external-consumer counterpart of the in-body offset reads: input offsets are
+  KView §3.1, in-progress-output offsets are history carries §4.6.)
+- **No K-bearing input ⇒ explicit range required** (pure recurrence,
+  `xs=None` / `length=` in JAX terms).
+- **Guard-refined extent, not a naive intersection.** With KView offsets the
+  available range shrinks by the offsets, refined *per guarded region*: an
+  input defined on a sub-range is legal as long as every region's reads stay
+  within its domain. The production case is the PMAP back substitution
+  (research §A.8): a full-column scan over a temporary defined on one level
+  less, well-formed because the last-level branch reads it only at offset −2.
+  The formal rule (anchors resolve against the range being deduced — a
+  fixpoint) is open question 9; the explicit `k_range` override sidesteps it
+  case by case.
 
 This is a semantic change: today's "scan exactly over the requested output"
 becomes "scan over the defined inputs, write the requested output". For the
 practically relevant cases (output range == input range, or output is a
 sub-range as in the `[:, 1:]` slicing idiom) the observable behaviour is
-unchanged, but it is now *predictable from the call site*.
+unchanged, but it is now *predictable from the call site*, and the
+output-driven vertical range disappears at both levels
+(`_extract_vertical_dims`, `closure_column_range`).
 
 ### 3.3 Boundary conditions
+
+> **NEEDS REVIEW** — not yet revisited this iteration (peeling guarantee,
+> anchors); §3.3.2 is separately flagged below.
 
 Three complementary mechanisms, ordered by how often we expect them:
 
@@ -442,9 +572,25 @@ Three complementary mechanisms, ordered by how often we expect them:
    wrappers (§3.5: `exclusive_cumsum`, `scan_with_initial`) rather than as
    core variants. The emitted level is also the natural producer of
    *staggered* outputs — fluxes on interfaces (n+1) from cell quantities
-   (n), where "the flux at the model top is the boundary condition" — and
-   should compose with however field view ends up modelling half-level
-   dimensions (open question §5).
+   (n), where "the flux at the model top is the boundary condition". Two
+   constraints pin this down, from §3.2 and the staggering dependency:
+
+   - **Well-defined only for carry-is-output / projector scans (model (B),
+     §3.1).** `include_initial` emits `project(init)` at the boundary level;
+     in model (A) free-output the emitted level has no level-input to feed
+     `y = g(carry, x_k)`, so the emission is undefined. We restrict
+     `include_initial` to projector scans.
+   - **The +1 level's home is deferred to staggering.** Extending the output
+     one level past the input range is exactly what §3.2 calls an
+     out-of-range write — *unless* the extra level lives on a different
+     dimension. Cell→interface staggering is exactly that: n cells map to
+     n+1 interfaces on `Staggered[KDim]` (a dimension change, not an
+     out-of-range write), and §3.2's rule holds cleanly. Until the staggering
+     model lands (`Staggered[D]`,
+     [[ideas/havogt/dimension-generic-fields|generic dimensions]]; the
+     Dependency note above), `include_initial` on the same dimension is an
+     array-API stopgap and the boundary/output design here is not final
+     (open question 2). **NEEDS REFINEMENT** (blocked on staggering).
 
 3. **Composition outside the scan** with `concat_where` over K regions —
    possible because the scan range is explicit (§3.2). This replaces the
@@ -453,6 +599,8 @@ Three complementary mechanisms, ordered by how often we expect them:
    different algorithms.
 
 ### 3.4 Vertical windows and scan + sub-reduce
+
+> **NEEDS REVIEW** — windows not yet revisited this iteration (open question 6).
 
 The second new construct targets algorithms of the form
 
@@ -568,9 +716,12 @@ carry-is-output convention.
 ### 3.7 Migration
 
 - `@gtx.scan_operator(axis=..., forward=..., init=...)` is kept for one
-  deprecation cycle as sugar: scalar body interpreted as simple-form slice
-  body (Python `if` on data values rewritten to `where` where possible,
-  otherwise a deprecation error with a fix-it hint).
+  deprecation cycle as sugar. If the slice body wins the §4.1 decision, the
+  scalar body is interpreted as a simple-form slice body (Python `if` on data
+  values rewritten to `where` where possible, otherwise a deprecation error
+  with a fix-it hint); if the `scalar_operator` variant is retained, the
+  migration is the identity — old scalar `scan_operator` bodies become
+  `scalar_operator` steps passed to the combinator, `if` and all.
 - The `out=field[:, 1:]` slicing idiom keeps working (it is just an output
   restriction under §3.2 semantics).
 - Tests in `tests/next_tests/**/ffront_tests/` that exercise scans
@@ -578,6 +729,9 @@ carry-is-output convention.
   spec; each gets a rewritten twin before the old path is removed.
 
 ### 3.8 Composability and scan fusion
+
+> **NEEDS REVIEW** — fusion guarantees not yet revisited this iteration
+> (open question 5).
 
 The muphys evidence (P6, research §A.7) shows what happens when small scans
 are not viable: users fuse by hand. The design response has four parts:
@@ -619,6 +773,9 @@ are not viable: users fuse by hand. The design response has four parts:
    unnecessary with future transformations").
 
 ### 3.9 Vertical reductions and the fold form
+
+> **NEEDS REVIEW** — vertical reductions not yet revisited this iteration
+> (open question 10).
 
 Field view today reduces only over local dimensions (P7). The missing
 vertical reduction splits into two tiers, following the ecosystem split
@@ -707,29 +864,61 @@ is unchanged.
 
 ## 4. Discussion: decisions, pros and cons, alternatives
 
-### 4.1 Body granularity: scalar vs level slice vs whole column
+### 4.1 Body granularity: scalar element vs level slice (vs whole column)
 
-|                 | scalar element (status quo)                  | **level slice (proposed)**        | whole column (LFRic-style)         |
-| --------------- | -------------------------------------------- | --------------------------------- | ---------------------------------- |
-| embedded speed  | Python per element — unusable for real sizes | array op per level                | array op per column batch          |
-| JAX mapping     | none                                         | `lax.scan` exactly                | possible but manual                |
-| per-column `if` | natural                                      | `where` only                      | natural                            |
-| type system     | promotion/demotion magic                     | plain broadcasting                | needs column types                 |
-| backend codegen | per-column loop (natural for GTFN)           | scalarize per column (mechanical) | compiler must rediscover structure |
+> **NEEDS REFINEMENT** — body granularity / `if`-vs-`where`, `scalar_operator`,
+> elemental `map`, and the JAX-lowering performance comparison (open
+> questions 11–12).
 
-The slice body loses scalar `if` — the one real regression. We accept it:
-(a) per-column data-dependent branching expresses as `where`; (b) every
-array ecosystem (JAX, PyTorch, Futhark on GPU) made the same trade; (c) the
-scalar form survives as migration sugar. The muphys
-`if current_level_activated:` work-skipping branch is the strongest
-counter-example — but note that on GPUs the scalar skip only pays when a
-whole warp of columns is inactive, and its identity else-branch is what the
-hand-written DaCe cleanup hooks exist to repair (§3.8): the branch is better
-treated as a masking *transformation* than as user-level control flow.
-Whole-column kernels (write the k-loop yourself) were rejected: maximal
-freedom, but the toolchain loses the recurrence structure (no interval
+This is an **open design axis, not a settled choice.** Both the scalar-element
+body (`scalar_operator`, native `if`) and the level-slice body
+(`field_operator`, `where`) are variants we want on the table; the table below
+is the discussion basis and the `if`-vs-`where` question is the crux.
+
+|                        | scalar element (`scalar_operator`)                                                | level slice (`field_operator`)    | whole column (§4.8)      |
+| ---------------------- | --------------------------------------------------------------------------------- | --------------------------------- | ------------------------ |
+| per-column `if`        | native Python `if`                                                                | `where` only (branch-free)        | native                   |
+| embedded NumPy/CuPy    | array ops if branch-free; Python per element only where `if` is data-dependent    | array op per level                | array op per col. batch  |
+| JAX lowering           | `vmap`(orthogonal) ∘ `lax.scan` — canonical NWP pattern (§B.1), **not** "none"     | array `lax.scan`                  | manual                   |
+| reuse in field context | `*_scalar` twins (P6) — **removed once `map` exists** (below)                      | calls field operators directly    | n/a                      |
+| type system            | scalar→field lifting made explicit by `scan`/`map` (replaces hidden P2 promotion) | plain broadcasting                | column types             |
+| backend codegen        | per-column loop                                                                   | scalarize per column (mechanical) | compiler must rediscover |
+
+**`if` vs `where` (the crux, to be discussed).** The slice body forces
+data-dependent branching into `where`: branch-free and GPU-friendly, but both
+arms are evaluated. The scalar body keeps native `if`: how column physics is
+naturally written (muphys `if current_level_activated`, branchy
+microphysics), and on a GPU the skip pays off when a whole warp of columns is
+inactive. The earlier draft's stance — always `where`, treat work-skipping as
+a masking transformation (§3.8.4) — is *one* position; the counter-position is
+that some physics is clearer and faster with `if`, so the scalar body stays
+first-class. Both are kept; the decision is open (§5).
+
+**`scalar_operator` + elemental `map`.** Two historical arguments against
+scalar bodies dissolve once a scalar kernel can be *lifted* explicitly. We
+float a `map` that promotes a `scalar_operator` to act point-wise on fields —
+Fortran `elemental` procedures are the exact reference (one scalar definition,
+callable on scalars or arrays). With `map`: the `*_scalar` twin explosion (P6)
+disappears — write the kernel once, `map` it for field use and pass it to
+`scan`/`fold` for column use; and the `_scan_param_promotion` "dishonesty"
+(P2) becomes explicit, named lifting rather than hidden machinery. So
+`scalar_operator` is not merely a migration shim: with `map` it is a reusable,
+composable primitive that *also* enables scalar `if`. (`map` spelling and
+semantics is itself an open question — §5.)
+
+**Performance is unsettled and must be measured.** The same scan semantics
+admits at least three JAX lowerings whose GPU performance can differ
+substantially: (i) an **array `lax.scan`** with horizontal-slice-valued carry
+(the slice body); (ii) a **`vmap`(orthogonal axes) ∘ `lax.scan`** with a
+scalar carry (the scalar body, JAX-canonical); (iii) a **full-field** version
+with explicit per-level array ops and no scan primitive. Which wins for NWP
+shapes (k≈100, large horizontal) is an open empirical question and a
+prerequisite for choosing the default body granularity (§5).
+
+Whole-column kernels (write the k-loop yourself) stay the §4.8 escape hatch:
+maximal freedom, but the toolchain loses the recurrence structure (no interval
 splitting, no k-caching, no `lax.scan` mapping, no future associative
-lowering).
+lowering), so they are out of scope for v1.
 
 ### 4.2 Carry/output separation
 
@@ -851,9 +1040,13 @@ the scan.
     converges on, and share one vocabulary with the `KDim.start`/`KDim.stop`
     anchors of §3.3 (end-relative bounds like "all but the last level" need
     them — research §A.8).
-04. **Simple-form detection.** Return-annotation-based (`-> float` vs
-    `-> tuple[carry, y]`) is implementable in the traced frontend but subtle
-    for tuple carries; an explicit flag (`emit="carry"`) may be safer.
+04. **Choosing the output model (§3.1 (A) vs (B)).** Model (A) returns
+    `(carry, y)`; model (B) returns the carry alone plus a projector (identity,
+    non-identity, or absent for the fold). Reading this off the return shape is
+    subtle — (A)'s `(carry, y)` collides with a 2-component carry — so an
+    explicit marker (a `project=` / `fold` spelling, tied to the
+    decorator-vs-combinator question) may be safer. The projector already makes
+    simple-vs-fold unambiguous; only (A)-vs-(B) remains.
 05. **Fusion guarantees.** §3.8 makes scan fusion an obligation — but spec
     or best-effort? Which compositions are *guaranteed* (same range/direction,
     same-level coupling) vs merely attempted (different ranges, opposing
@@ -887,6 +1080,17 @@ the scan.
     whether unspecified association needs an explicit opt-in/opt-out
     flag, or whether "write the fold" suffices as the reproducibility
     story (§3.9).
+11. **Body granularity, `if` vs `where`, and `scalar_operator` (§4.1).**
+    Keep the scalar-element body first-class — native `if`, the
+    `vmap ∘ lax.scan` lowering, and elemental `map` reuse — alongside the
+    slice body, or commit to slice-only with `where`? The empirical JAX
+    lowering comparison (array `lax.scan` vs `vmap ∘ lax.scan` vs full-field)
+    should drive the default; until it is measured, neither is the obvious
+    winner.
+12. **Elemental `map` (§4.1).** Spelling and semantics of promoting a
+    `scalar_operator` point-wise over fields (the Fortran-`elemental`
+    analog), how it composes with `scan`/`fold`, and whether it fully
+    subsumes the `*_scalar` twin pattern.
 
 ## 6. Consequences
 
@@ -899,8 +1103,9 @@ muphys-scale schemes into per-process scans without a performance penalty
 (given §3.8). Tracing also shallows out: slice bodies calling field
 operators replace the deeply recursive scalar expansion behind icon4py's
 `sys.setrecursionlimit` workarounds. Harder/cost: a frontend+IR+all-backends
-change with a deprecation cycle; per-column `if` users must move to `where`
-(work-skipping becomes a transformation, §4.1); the peeling guarantee,
+change with a deprecation cycle; per-column `if` users may need to move to
+`where` if the slice body wins the §4.1 decision (work-skipping then becomes a
+masking transformation); the peeling guarantee,
 K-view extents, window lowering, and the fusion obligation are new backend
 responsibilities (GTFN intervals, scan merging, and k-caches already exist;
 DaCe needs loop-region splitting and fusion).
