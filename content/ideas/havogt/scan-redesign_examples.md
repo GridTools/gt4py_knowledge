@@ -11,7 +11,7 @@ created: 2026-06-12
 
 Before/after code for the main scan use cases under the proposed design.
 All "proposed" code uses the strawman syntax of the proposal (§3.1–§3.4,
-§3.8) and is **illustrative, not validated**: names, the `k_range=` spelling,
+§3.6) and is **illustrative, not validated**: names, the `k_range=` spelling,
 and `KView` indexing are open questions (§5 of the proposal). The physics in
 the muphys sketch is transcribed for structure, not correctness.
 
@@ -123,18 +123,28 @@ def pressure_step(p_interface: float, dz_rho_g: float) -> tuple[float, tuple[flo
 _, (pressure, pressure_ifc) = pressure_step(dz_rho_g, init=surface_pressure)
 ```
 
-With `include_initial=True` the surface value itself appears in the output —
-n cell inputs, n+1 interface outputs, "the value at the boundary *is* the
-init" (the exclusive/inclusive duality, research §B.2):
+With `include_initial=True` the surface value itself is emitted — n cell
+increments, n+1 interface values, "the value at the boundary *is* the init"
+(the exclusive/inclusive duality, research §B.2). `include_initial` is
+restricted to carry-is-output / projector scans (proposal §3.3.2), so it is
+shown here on the interface pressure alone (the carry); a full-level output
+like `p_full` above would be derived separately. The n+1th level lives on the
+interface (half-level) grid — its modelling waits on staggering (proposal
+Dependency note, open question 2):
 
 ```python
-_, p_ifc = pressure_step(dz_rho_g, init=surface_pressure, include_initial=True)
+@gtx.scan(axis=KDim, forward=False)  # carry-is-output: interface pressure
+def p_ifc_step(p_interface: float, dz_rho_g: float) -> float:
+    return p_interface * exp(...)  # interface above
+
+
+p_ifc = p_ifc_step(dz_rho_g, init=surface_pressure, include_initial=True)
 ```
 
 ## 4. Thomas algorithm: don't write it at all
 
 ```python
-w = gtx.lib.tridiagonal_solve(a, b, c, d)  # proposal §3.5
+w = gtx.lib.tridiagonal_solve(a, b, c, d)  # proposal §3.7
 ```
 
 Today this is two hand-written scans (icon4py
@@ -242,7 +252,7 @@ Surface outputs `pr, ps, pi, pg, pre` are extracted in the `@gtx.program` by
 slicing the last level (`dims.KDim: (vertical_end - 1, vertical_end)`).
 
 Proposed decomposition — one scan *per species* plus one for temperature;
-under §3.8 the toolchain must fuse these into a single k-loop:
+under §3.6 the toolchain must fuse these into a single k-loop:
 
 ```python
 class PrecipState(NamedTuple):
@@ -304,7 +314,7 @@ own 4 floats / 1 float), the `rho` delay line (`rho[-1]`), the external
 field operators), the program-level surface slicing (final carries), and
 the `if current_level_activated:` identity else-branch with its ~650 lines
 of DaCe repair hooks (`where`-masking; "else is identity" becomes a
-transformation concern). What it costs: correctness now depends on the §3.8
+transformation concern). What it costs: correctness now depends on the §3.6
 fusion obligation — five scans sharing `rho`, `zeta`, masks must compile to
 one vertical loop, which is the acceptance test of the rewrite.
 
@@ -314,7 +324,7 @@ one vertical loop, which is the acceptance test of the rewrite.
 the vertical line solve of a line-relaxation Helmholtz preconditioner,
 applied `nitr` times per call inside a GCR-style iteration. Deliberately not
 textbook Thomas: the coefficients are pre-factored outside the solver (so
-§3.5's `tridiagonal_solve` does not apply), the recurrences are stride-2
+§3.7's `tridiagonal_solve` does not apply), the recurrences are stride-2
 (two interleaved even/odd elimination chains), and there are two-level
 boundary regions at both column ends.
 
@@ -410,11 +420,11 @@ What this exercises beyond the earlier examples:
   them without hand-threading `(ff, ff_km1)` delay-line tuples.
 - **Pre-factored solve**: `dnmi`, `ee`, `denratm` are factored once outside
   the GCR loop; only the sweeps re-run. The raw primitive, not
-  `gtx.lib.tridiagonal_solve`, carries this case (§3.5).
+  `gtx.lib.tridiagonal_solve`, carries this case (§3.7).
 - **Opposite-direction pair**: `ff` is materialized between the two scans,
   exactly as the GTScript 3D temporary is today — no regression, and a
-  concrete instance of the fusion question (proposal §5.5: opposing
-  directions are "attempted", not guaranteed).
+  concrete instance of the fusion question (proposal §5, open question 5:
+  opposing directions are "attempted", not guaranteed).
 
 ## 8. Tropopause inversion + mixing length (PHYEX)
 
@@ -424,7 +434,7 @@ tracking `(ZTMIN, ITPL)` (minimum temperature and its level), then a
 mixing-length loop whose recurrence branch depends on the height of the
 per-column tropopause level `PZZ(JIJ, ITPL(JIJ))`.
 
-Proposed — the level search is a reduction (§3.9), the height lookup a
+Proposed — the level search is a reduction (§3.5), the height lookup a
 computed-index gather (separate design discussion), the recurrence an
 ordinary scan with a data-dependent `where`:
 
@@ -448,7 +458,7 @@ def mixing_length(t: IJKF, zz: IJKF, z_sfc: IJF) -> IJKF:
 What disappeared: the in-carry `(t_min, k)` tracking with a hand-rolled
 level counter (the §A.7 `_compute_param` idiom) and a full-3D
 materialization for a column-constant quantity (`itpl`, `z_tpl` are
-k-less). What it needs: `argmin` (§3.9) and the `as_index` gather
+k-less). What it needs: `argmin` (§3.5) and the `as_index` gather
 (separate design discussion; strawman spelling).
 
 ## 9. Per-column variable-depth accumulation (Noah LSM)
@@ -457,7 +467,7 @@ k-less). What it needs: `argmin` (§3.9) and the `as_index` gather
 k-loop running to a per-column depth `nroot` (root zone; the PBL variant
 varies at runtime), accumulating a k-less soil conductance. The trip count
 is data, so no anchored condition applies — the §4.8 answer is a masked
-full-range reduction, with the level index as a value (§3.9):
+full-range reduction, with the level index as a value (§3.5):
 
 ```python
 @gtx.field_operator
