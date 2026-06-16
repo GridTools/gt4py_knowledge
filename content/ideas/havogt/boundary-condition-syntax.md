@@ -5,6 +5,11 @@ tags: [frontend, foast, boundary-conditions, concat_where, regions, syntax-sugar
 created: 2026-06-16
 ---
 
+> **Early design ideas.** This is an exploratory brainstorm — a menu of mostly mutually exclusive
+> possibilities to react to, not a committed design, a recommendation of record, or a plan to
+> implement. Nothing here has been prototyped or agreed on; expect rough edges, overlap, and dead
+> ends.
+
 > **TL;DR** `gt4py.next` writes boundary conditions as `concat_where(domain, true, false)`.
 > Real code (icon4py) builds a multi-region column as a **chain of reassignments** or a
 > **nest** of `concat_where` calls, which reads poorly. `match` / `if`-`elif`-`else` would be
