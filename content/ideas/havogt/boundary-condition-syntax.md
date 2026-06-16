@@ -478,6 +478,51 @@ partially-built `result` through the scope is non-trivial.
 | **P6** `concat[..](..)` | `__getitem__` + `__call__` | expression | n/a (already a call) | **✓ free** | **partition** | `default=` / tiling | low–med |
 | **P7** `with concatenated()` | `with` + `__setitem__` | statement | **yes** | via rewrite / builder | partition / last-paint | `otherwise()` / base | med–high |
 
+## How regions compose: first-match, last-paint, partition
+
+The proposals differ in what happens to a point that more than one region could touch — the
+"Precedence" column above. There are three models; all three still lower to nested `concat_where`
+and differ only in the contract the *surface* signs the user up for.
+
+**Painting (overlapping, order matters).** Start from a base and stamp regions on top, like numpy
+masked assignment; where regions overlap, a later write wins over an earlier one.
+
+```python
+out[...]     = inner(...)    # base layer: the whole column
+out[K[0]]    = top(...)      # stamp over level 0
+out[K[nlev]] = surface(...)  # stamp over the last level
+```
+
+The base `out[...]` is the default. This is Proposal 5, and exactly icon4py's real idiom
+(`wgt = concat_where(...); wgt = concat_where(..., wgt)` — each call refines the previous result).
+Flexible and incremental, but reordering can change the result when regions overlap.
+
+**Partition (disjoint tiling, order irrelevant).** The regions are mutually exclusive and together
+cover every point exactly once.
+
+```python
+out = concat[K[0], K[1:nlev], K[nlev]](top, inner, surface)  # disjoint; tile the whole column
+```
+
+No point is touched twice, so there is no precedence and order does not matter — the natural reading
+of Proposals 6/7. Cleaner, and potentially cheaper (nothing is computed-then-overwritten), but it
+carries a **coverage obligation**: every point must fall in some region (or an explicit
+`default=`/`otherwise()`), and the tooling must *check* completeness and disjointness.
+
+**First-match (overlapping, first wins).** Ordered like `if`/`elif`/`else`: the first region that
+matches a point wins. This is Proposals 1/2/4 (and a hand-written `concat_where` nest) — the same
+"ordered + overlap allowed" shape as painting, but with the opposite priority.
+
+| Model | Overlap? | Who wins | Surface examples |
+| --- | --- | --- | --- |
+| **first-match** | allowed | the *first* matching region | `if`/`elif`/`else` (P1), `match` (P2), `cases(...)` (P4), a `concat_where` nest |
+| **last-paint** | allowed | the *last* write | `out[domain] = ...` (P5) |
+| **partition** | none (by construction) | — (each point once) | `concat[...](...)`, `with concatenated()` (P6/P7) |
+
+first-match and last-paint are both ordered-with-overlap but opposite in priority; partition is
+unordered-without-overlap with a coverage requirement. The open design question is which single
+model to commit to — shipping several risks leaving users unsure which write wins.
+
 ## Recommendation
 
 A pragmatic, layered path rather than a single winner:
@@ -537,10 +582,9 @@ default — which is precisely Proposals 4 and 6, and what Proposals 1/3/5/7 are
   AST rewrite to `concat_where` for the marker-bearing forms (3, 5, custom-pattern 2). Is adding an
   `ast`-rewriting pass to the `next` frontend acceptable, given `next` deliberately avoids
   cartesian's "parse, never run" model? This is the central decision.
-- **Precedence model.** First-match (1–4), last-paint (5), or **partition** (6/7 — disjoint regions
-  tile the domain, each assigned exactly once). Partition is the cleanest (no precedence) but needs a
-  coverage check; painting is the most flexible. Shipping more than one risks confusion; pick one
-  mental model or make the difference syntactically obvious.
+- **Precedence model.** Which single composition model — first-match, last-paint, or partition
+  (see *How regions compose* above) — should the sugar commit to? Shipping more than one risks
+  leaving users unsure which write wins; pick one, or make the difference syntactically obvious.
 - **Interaction with [[ideas/havogt/scan-redesign|scan redesign]].** That note already proposes
   `concat_where(KDim == 0, bc, recurrence)` *inside scans* and strawman anchored indices
   `KDim.start`/`KDim.stop`. The sugar here is orthogonal but should share the condition vocabulary;
