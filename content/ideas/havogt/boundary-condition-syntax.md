@@ -11,7 +11,7 @@ created: 2026-06-16
 > nicer but cannot run in **embedded** mode (the field-operator body executes as plain Python,
 > and a `Domain` condition is not a `bool`). `gt4py.cartesian` solves the analogous problem with
 > a `with horizontal(region[...])` statement, but only because cartesian has **no embedded mode**
-> — it always AST-parses. This note proposes **five** surface syntaxes that desugar to
+> — it always AST-parses. This note proposes **seven** surface syntaxes that desugar to
 > `concat_where` and discusses which can serve *both* execution modes. The unifying trick: a
 > construct works in embedded **iff it desugars to `concat_where` calls before the body runs** —
 > which is possible exactly when the construct carries an unambiguous *syntactic marker*.
@@ -33,8 +33,7 @@ created: 2026-06-16
 > *inside scans* via "peelable index conditionals" and strawman anchored indices
 > `KDim.start`/`KDim.stop`; this note is the orthogonal **field-operator frontend** layer.
 > [[ideas/havogt/field-data-protocol|FieldData protocol]] is the orthogonal **embedded
-> representation** layer (it makes infinite-domain `concat_where` representable).
-> **ADR**: [ADR 22 — Limitations of embedded `concat_where`](https://github.com/GridTools/gt4py/blob/main/docs/development/ADRs/next/0022-Limitations-of-embedded-concat_where.md).
+> representation** layer (it makes unbounded-domain `concat_where` representable).
 
 ---
 
@@ -69,7 +68,7 @@ From icon4py `compute_weight_factors.py` (`_compute_wgtfac_c`), a three-region c
 
 ```python
 wgt_fac_c = concat_where(
-    (0 < dims.KDim) & (dims.KDim < nlev),  # noqa: SIM300 [yoda-conditions]
+    (dims.KDim > 0) & (dims.KDim < nlev),
     _compute_wgtfac_c_inner(z_ifc),
     z_ifc,
 )
@@ -77,8 +76,8 @@ wgt_fac_c = concat_where(dims.KDim == 0,    _compute_wgtfac_c_0(z_ifc=z_ifc),   
 wgt_fac_c = concat_where(dims.KDim == nlev, _compute_wgtfac_c_nlev(z_ifc=z_ifc), wgt_fac_c)
 ```
 
-**2. Nesting.** Disjoint or multi-way conditions must be hand-nested (ADR 22 forbids
-`KDim != n` and multi-dim conditions directly). From icon4py
+**2. Nesting.** A multi-way (three-or-more-region) split is written as a *nest* of
+`concat_where` calls, read inside-out. From icon4py
 `compute_edge_diagnostics_for_dycore_and_update_vn.py` (`apply_on_vertical_level`), a textbook
 `if/elif/else`:
 
@@ -91,10 +90,7 @@ return concat_where(
 ```
 
 The wish is explicit in the icon4py source — `apply_diffusion_to_vn.py` literally carries
-`# TODO(): Use if-else statement instead` above a `concat_where`-in-a-ternary. The
-`# noqa: SIM300 [yoda-conditions]` markers on `(0 < KDim)` are a second papercut: the dimension
-must be on the *left* of a comparison to produce a `Domain`, so half the conditions read
-backwards.
+`# TODO(): Use if-else statement instead` above a `concat_where`-in-a-ternary.
 
 What we want is something like
 
@@ -136,7 +132,7 @@ condition** has a fundamental problem in embedded mode:
   (`func_to_foast.py:422`) and ternaries into `TernaryExpr`, but type-deduction **requires the
   condition to be a scalar `bool`** (`type_deduction.py:362-373`) and lowers it to a scalar
   select `im.if_` — not `concat_where`. `and`/`or` are rejected (use `&`/`|`); chained compares
-  `0 < KDim < 5` are rejected with an auto-suggestion to write `(0 < KDim) & (KDim < 5)`.
+  `0 < KDim < 5` are rejected with an auto-suggestion to write `(KDim > 0) & (KDim < 5)`.
 
 So the design space is governed by one rule:
 
@@ -146,7 +142,7 @@ So the design space is governed by one rule:
 > `concat_where` so the rewritten function still executes natively). For **compiled** execution
 > any of these can additionally/instead be lowered in FOAST.
 
-And a corollary that discriminates the five proposals:
+And a corollary that discriminates the proposals:
 
 > **A decoration-time AST rewrite can only fire on an unambiguous _syntactic_ marker** (it has no
 > type information). `with region(<cond>):`, `out[<cond>] = ...`, and a `cases(...)` call are
@@ -207,8 +203,7 @@ branches.
 **Cons.** The embedded story is genuinely bad — the scalar-`if` vs domain-`if` ambiguity is
 irreducible at the AST level, forcing either compiled-only or a marker (which erases the
 elegance). Mixing scalar control-flow `if` and domain `if` in one operator is confusing. `else`
-is effectively mandatory (the result must be defined everywhere). Does nothing for ADR-22 disjoint
-beyond what `&`/`|` already give.
+is effectively mandatory (the result must be defined everywhere).
 
 ---
 
@@ -291,15 +286,13 @@ function still executes natively in embedded. `otherwise()` supplies the innermo
 
 **Pros.** Direct parity with the cartesian `region` people already like (easiest migration path);
 the marker gives a *single* implementation for both modes; groups multi-statement boundary code
-visually; `otherwise()` is an explicit default; multi-dim conditions can auto-nest (a quiet
-ergonomic win over ADR-22's manual nesting). Mirrors Devito `Eq(subdomain=)`, YASK `IF_DOMAIN`,
+visually; `otherwise()` is an explicit default. Mirrors Devito `Eq(subdomain=)`, YASK `IF_DOMAIN`,
 ExaSlang `apply bc`.
 
 **Cons.** `with`-blocks read as imperative mutation but the result is functional — a slight
 conceptual mismatch (also true of cartesian). Capturing the per-block assignment requires the AST
 rewrite (a runtime-only context manager *cannot* intercept `wgt = ...`, since `with` does not trap
-assignments) — so this proposal is inseparable from shipping the rewriter. Nested `with` for
-multi-dim conditions is verbose. Cartesian's subtle "a region executes only where consumed in the
+assignments) — so this proposal is inseparable from shipping the rewriter. Cartesian's subtle "a region executes only where consumed in the
 compute domain" semantics would *not* carry over (next has explicit domains), so it is parity in
 *looks* more than in *meaning*.
 
@@ -376,14 +369,14 @@ embedded it can even be done at runtime: make the accumulator a small builder wh
 
 **This collapses icon4py's dominant idiom 1:1.** The three-line
 `wgt_fac_c = concat_where(...); wgt_fac_c = concat_where(...); wgt_fac_c = concat_where(...)` chain
-*is already* "paint region after region onto one variable" — written backwards. Domain-subscript
-assignment is that idiom with the noise removed, and it fixes the Yoda-condition papercut
-(`wgt[0 < KDim]` is never needed; you paint `KDim == 0` directly).
+*is already* "paint region after region onto one variable", read inside-out. Domain-subscript
+assignment is that idiom with the noise removed — you paint `wgt[K[0]] = top(...)` directly, in
+source order.
 
 **Pros.** Matches the real chained-reassignment idiom most directly (biggest practical win on
 actual code); reads like numpy `a[mask] = ...` and cartesian region-assignment; "last paint wins"
 is intuitive for BCs and needs no mandatory single `else` (the base layer is the default); the
-marker gives one implementation for both modes; multi-dim conditions auto-nest; incremental
+marker gives one implementation for both modes; incremental
 (add one region at a time). Echoes APL `⌺`/Devito region-restricted assignment.
 
 **Cons.** Tension with SSA/immutability: field operators are single-assignment and functional, and
@@ -396,44 +389,122 @@ use, so the two must be unambiguous.
 
 ---
 
-## Design axes (how the five compare)
+## Proposal 6 — `concat[regions](branches)`: a positional N-way splice
 
-| Axis | P1 `if/elif` | P2 `match` | P3 `with region` | P4 builder | P5 paint `out[d]=` |
-| --- | --- | --- | --- | --- | --- |
-| Python feature | `if`/`IfStmt` | PEP 634 match | `with`/ctx-mgr | varargs/dict/chain | `__setitem__` |
-| Statement or expr | statement | statement | statement | expression | statement |
-| Syntactic marker for AST rewrite | **no** (≡ scalar `if`) | weak (guards) / yes (custom pat) | **yes** | n/a (already a call) | **yes** |
-| Embedded without new machinery | ✗ | ✗ | via rewrite | **✓** | via rewrite (or builder) |
-| Compiled change | small (`visit_IfStmt`) | new `visit_Match` | AST pass | new builtin | AST pass |
-| Precedence | first-match | first-match | first-match | first-match | **last-paint** |
-| Default / else | `else:` | `case _:` | `otherwise()` | `default=` / `...` | base `out[...]` |
-| Matches real icon4py idiom | nested cases | nested cases | grouped regions | the table | **the chain (1:1)** |
-| Risk | medium–high | high | medium | **low** | medium |
+*(Python feature (mis)used: `__getitem__` to take a list of region literals, then `__call__` to take one branch per region — an expression, a multi-arm `concat_where` in a single call. From old design notes.)*
+
+```python
+# region literals: K[0] ≡ "level 0", K[1:nlev] ≡ "levels 1 .. nlev-1", K[nlev] ≡ "level nlev"
+result = concat[K[0], K[1:nlev], K[nlev]](lower, interior, upper)
+
+# or leave the interior implicit:
+result = concat[K[0], K[nlev]](lower, upper, default=interior)
+```
+
+**A region-literal notation worth adopting everywhere.** `K[...]` is sugar for a `Domain`: `K[0]` ≡
+`KDim == 0`, `K[1:nlev]` ≡ `(KDim >= 1) & (KDim < nlev)`, `K[nlev]` ≡ `KDim == nlev`. It mirrors
+cartesian's `I[0]` / `J[-1]` axis-subscript and Python slicing, and is markedly cleaner than
+spelling out comparisons. Any proposal here can use it (e.g. Proposal 1's `if K[0]:`, Proposal 5's
+`out[K[0]] = ...`); it is introduced here because it is what makes the positional form read well.
+
+**Mechanism.** `concat[r0, r1, r2]` captures the tuple of region literals via `__getitem__` and
+returns a callable; calling it with the branches matches branch *i* to region *i* by position and
+folds to nested `concat_where`. It is an **expression** (a call), so embedded works for free; for
+compiled the frontend recognizes the `concat[...](...)` builtin.
+
+**Pros.** The most compact N-way form — every region and the whole splice in one expression; no
+statement/SSA/scope concerns; embedded-safe with no AST rewrite; the `K[1:nlev]` slice is far nicer
+than `(KDim >= 1) & (KDim < nlev)`. A disjoint region list reads as a **partition** of the column
+(each level in exactly one region), so there is no precedence to reason about.
+
+**Cons.** Positional region↔branch matching gets error-prone past a few regions — you read the
+region list, then count into the branch list, and a misalignment is silent. Regions and values are
+physically separated. `concat[...](...)` (subscript-then-call) is unusual Python that
+linters/type-checkers/readers may trip on. Needs a coverage rule (regions must tile the output, or a
+`default=`). A new notation (`K[...]`) to learn, though it pays for itself.
+
+---
+
+## Proposal 7 — `with concatenated() as result:` (a scoped region builder)
+
+*(Python feature (mis)used: a `with` scope that introduces and finalizes a result builder, combining region blocks with subscript painting. From old design notes; refines Proposals 3 and 5.)*
+
+```python
+@field_operator
+def boundary(...):
+    with concatenated() as result:
+        result[K[0]]      = top(...)          # one-liner painting for simple regions
+        result[K[1:nlev]] = inner(...)
+        with result(K[nlev]) as upper:        # a block (+ sub-handle) for multi-statement regions
+            tmp = some(...)
+            upper[...] = surface(tmp)
+    return result
+```
+
+(Two pure variants also work: every region as a `with result(K[...]) as sub:` block, or every
+region as a `result[K[...]] = ...` one-liner.)
+
+**Mechanism.** `concatenated()` is a context manager that yields a builder `result` and assembles
+the recorded regions into a `concat_where` structure on `__exit__`. `result[region] = expr` records
+a one-liner; `with result(region) as sub:` opens a sub-scope whose local handle `sub` (or `result`
+itself) is painted with `sub[...] = expr`. The enclosing `with concatenated()` is an unambiguous
+marker, so one decoration-time AST rewrite serves embedded and compiled alike.
+
+**Pros.** The explicit scope **removes Proposal 5's seed/SSA ambiguity** — `result` is introduced
+and finalized by `concatenated()`, so there is no question of where the accumulator comes from. It
+is the **best of Proposals 3 and 5**: one-liners for simple regions, blocks (with a named
+sub-handle) for multi-statement boundary code. The regions read top-to-bottom as a domain
+decomposition, and a disjoint region set is a clean **partition** (each region assigned once — no
+precedence). Unambiguous marker → uniform embedded/compiled.
+
+**Cons.** The most machinery of any proposal: a context-manager protocol, per-region sub-handles,
+and the AST rewrite. `result` plays three roles — the scope handle, the block opener
+`result(region)`, and the painter `result[region] =` — which must be specified carefully or it
+confuses. Per-region `with` is verbose when most regions are one-liners (the mixed form mitigates).
+Needs a coverage rule (regions tile the domain, or an explicit `otherwise()`), and typing the
+partially-built `result` through the scope is non-trivial.
+
+---
+
+## Design axes (how the seven compare)
+
+| Proposal | Python feature | Form | AST-rewritable marker | Embedded cost | Precedence | Default / else | Risk |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **P1** `if`/`elif` | `if` / `IfStmt` | statement | **no** (≡ scalar `if`) | ✗ (needs types) | first-match | `else:` | med–high |
+| **P2** `match` | PEP 634 match | statement | weak (guards) / yes (custom pat) | ✗ | first-match | `case _:` | high |
+| **P3** `with region` | `with` / ctx-mgr | statement | **yes** | via rewrite | first-match | `otherwise()` | medium |
+| **P4** builder | varargs / dict / chain | expression | n/a (already a call) | **✓ free** | first-match | `default=` / `...` | **low** |
+| **P5** paint `out[d]=` | `__setitem__` | statement | **yes** | via rewrite / builder | **last-paint** | base `out[...]` | medium |
+| **P6** `concat[..](..)` | `__getitem__` + `__call__` | expression | n/a (already a call) | **✓ free** | **partition** | `default=` / tiling | low–med |
+| **P7** `with concatenated()` | `with` + `__setitem__` | statement | **yes** | via rewrite / builder | partition / last-paint | `otherwise()` / base | med–high |
 
 ## Recommendation
 
 A pragmatic, layered path rather than a single winner:
 
-1. **Ship Proposal 4 (`cases(...)` with `default=`) first as the semantic core.** It is the
-   honest, embedded-safe, low-risk baseline: a recognized builtin that folds to nested
-   `concat_where` and needs no AST surgery or `__bool__` tricks. Everyone can use it immediately,
-   and the statement sugars can desugar *into* it.
-2. **Add Proposal 5 (domain-subscript painting) as the headline sugar.** It collapses icon4py's
-   actual dominant pattern 1:1, fixes the Yoda-condition papercut, and its syntactic marker yields
-   one decoration-time AST rewrite serving *both* embedded and compiled.
-3. **Offer Proposal 1 (`if`/`elif`/`else`) as the most Pythonic surface for nested/branching
-   cases**, but only once the scalar-vs-domain `if` ambiguity is resolved — most likely
-   type-directed lowering in compiled plus a loud `Domain.__bool__` error (or an explicit
-   `if domain(...)` marker) in embedded.
-4. **Keep Proposal 3 (`with region`) as the cartesian-parity option** for teams porting cartesian
-   stencils.
-5. **Treat Proposal 2 (`match`) as lowest priority** — Python's missing range patterns make the
-   plain form a strictly more verbose `if`/`elif`; only the custom-matchable-region variant is
-   interesting, and that collapses into Proposal 4.
+1. **Ship an embedded-safe expression core first — Proposal 4 (`cases(...)`) and/or Proposal 6
+   (`concat[...](...)`).** Both fold to `concat_where` with no AST surgery and run in embedded
+   immediately; `cases` reads best for a handful of labelled regions, `concat[...]` for a compact
+   partition of a column. The statement sugars can desugar *into* this core.
+2. **Make Proposal 7 (`with concatenated() as result:`) the headline statement sugar.** It subsumes
+   the painting of Proposal 5 and the region blocks of Proposal 3, fixes Proposal 5's seed/SSA
+   ambiguity with an explicit scope, and its marker yields one decoration-time AST rewrite serving
+   *both* embedded and compiled. Proposal 5's bare `out[domain] =` painting is the lighter option
+   when no enclosing scope is wanted.
+3. **Adopt the `K[...]` region-literal notation everywhere** — `K[0]` / `K[1:nlev]` is cleaner than
+   `KDim == 0` / `(KDim >= 1) & (KDim < nlev)` and mirrors cartesian's axis-subscript.
+4. **Offer Proposal 1 (`if`/`elif`/`else`) as the most Pythonic surface for branching cases**, once
+   the scalar-vs-domain `if` ambiguity is resolved — most likely type-directed lowering in compiled
+   plus a loud `Domain.__bool__` error (or an explicit `if domain(...)` marker) in embedded.
+5. **Keep Proposal 3 (`with region`) as the cartesian-parity option**, and treat **Proposal 2
+   (`match`) as lowest priority** — Python's missing range patterns make the plain form a more
+   verbose `if`/`elif`; only the custom-matchable-region variant is interesting, and it collapses
+   into Proposal 4/6.
 
-All five must keep the ADR-22 contract: disjoint/multi-dimensional conditions still decompose into
-nested `concat_where`, but the sugar can do that nesting *for* the user (and emit better errors
-than today's raw `NotImplementedError`).
+In every form a region is an arbitrary `Domain`-valued expression — a single comparison, an
+`&`/`|` combination, a multi-dimensional condition, or a named index bound — and the sugar composes
+the regions into the appropriate `concat_where` structure, so the user writes a flat sequence of
+regions and never hand-builds the nest.
 
 ## Prior art (summary; details in the appendix)
 
@@ -458,7 +529,7 @@ From the [[ideas/havogt/boundary-condition-syntax_research|cross-DSL survey]]:
   an orthogonal "the function is told where it sits" idea.
 
 The recurring cross-system idiom is an ordered list of `(region predicate → branch)` pairs with a
-default — which is precisely Proposal 4, and what Proposals 1/3/5 are sugar over.
+default — which is precisely Proposals 4 and 6, and what Proposals 1/3/5/7 are sugar over.
 
 ## Open questions / conflicts
 
@@ -466,19 +537,19 @@ default — which is precisely Proposal 4, and what Proposals 1/3/5 are sugar ov
   AST rewrite to `concat_where` for the marker-bearing forms (3, 5, custom-pattern 2). Is adding an
   `ast`-rewriting pass to the `next` frontend acceptable, given `next` deliberately avoids
   cartesian's "parse, never run" model? This is the central decision.
-- **Precedence model.** First-match (1/2/3/4) vs last-paint (5). Shipping more than one risks
-  confusion; pick one mental model or make the difference syntactically obvious.
+- **Precedence model.** First-match (1–4), last-paint (5), or **partition** (6/7 — disjoint regions
+  tile the domain, each assigned exactly once). Partition is the cleanest (no precedence) but needs a
+  coverage check; painting is the most flexible. Shipping more than one risks confusion; pick one
+  mental model or make the difference syntactically obvious.
 - **Interaction with [[ideas/havogt/scan-redesign|scan redesign]].** That note already proposes
   `concat_where(KDim == 0, bc, recurrence)` *inside scans* and strawman anchored indices
   `KDim.start`/`KDim.stop`. The sugar here is orthogonal but should share the condition vocabulary;
-  and conditions like `KDim == nlev - 1` are currently broken by domain inference
-  ([gt4py#2205](https://github.com/GridTools/gt4py/issues/2205)), so a robust anchored end-index
-  notation would benefit every proposal here.
-- **Interaction with [[ideas/havogt/field-data-protocol|FieldData protocol]].** Infinite-domain
-  results (a scalar boundary extending past the compute domain — ADR 22's first restriction) need
-  the embedded representation work; the frontend sugar does not fix that, but it should not make it
-  harder (and the runtime-builder variant of Proposal 5 must cooperate with whatever backs an
-  infinite `concat_where`).
+  a robust anchored end-index notation (`KDim == KDim.stop - 1` rather than `KDim == nlev - 1`)
+  would make every proposal here read better.
+- **Interaction with [[ideas/havogt/field-data-protocol|FieldData protocol]].** Unbounded boundary
+  results (a scalar boundary extending past the compute domain) are an orthogonal *embedded
+  representation* concern handled by that note; the frontend sugar does not affect it, but the
+  runtime-builder variant of Proposal 5 must cooperate with whatever backs such a field.
 - **Type checking partial assignments.** Proposals 3 and 5 introduce a variable that is only fully
   defined after several blocks/paints. How does FOAST type and SSA-check the intermediate states?
 - **Scope.** Should the sugar also cover the pointwise `where` (mask) case, or stay
