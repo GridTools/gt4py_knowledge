@@ -48,10 +48,10 @@ and only repointed at the shared infra, folded into the layers later):
 
 | Layer | Gets |
 | --- | --- |
-| utils | `utils` (general Python helpers, from `eve`) — **semi-public** and dependency-isolated for later extraction as a standalone utility library, surfaced via a `gt4py.utils` facade — and `dsltools` (DSL/syntax-tree toolkit, from `eve`: datamodels, `Node` base, visitors, trees, traits, codegen); `defs` (today's `_core`). The `eve` name is **retired**. |
+| utils | `gt4py.utils` (general Python helpers, from `eve`) — an **independent, semi-public** library living *outside* `_internal` (no facade), dependency-isolated for later extraction as a standalone distribution — and `_internal/dsltools` (DSL/syntax-tree toolkit, from `eve`: datamodels, `Node` base, visitors, trees, traits, codegen); `_internal/defs` (today's `_core`). The `eve` name is **retired**. |
 | infrastructure | `next/otf/{compilation,binding}`, `next/otf/workflow`+`toolchain`, `config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` — shared by next and cartesian |
 | core | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, runner orchestration. *(cartesian's frontend+IR+backends join here in the later step.)* |
-| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`, and the semi-public `gt4py.utils`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (its helpers re-surface as the semi-public `gt4py.utils`, its toolkit becomes internal `dsltools`) |
+| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (its helpers become the standalone, semi-public `gt4py.utils` package in the *utils* layer — not a facade — and its toolkit becomes internal `dsltools`) |
 
 ## 2. Dependency tangles (why the layering is needed)
 
@@ -181,7 +181,7 @@ executor `CachedStep`, the on-disk build cache, and the argument-descriptor cach
 with **three** different key derivations and no documented contract for which is
 used when. `otf/stages.py` alone has `compilation_hash(...)` built on `hash((...))`
 *and* `fingerprint_compilable_program(...)` built on `content_hash((...))` (today an
-`eve` util; lands in `_internal/utils`) for the *same* compilable program; offset
+`eve` util; lands in the standalone `gt4py.utils`) for the *same* compilable program; offset
 providers are hashed by `id()` in at least one path. **Simplification.** One
 canonical content-based fingerprint (GTIR fingerprint, arg
 types, offset-provider *types*, backend-relevant config, gt4py version), shared by
