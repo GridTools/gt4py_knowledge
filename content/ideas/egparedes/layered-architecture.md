@@ -1,7 +1,7 @@
 ---
 title: A layered architecture for gt4py with enforced public/internal decoupling
 author: egparedes
-tags: [architecture, layering, tach, modularity, public-api, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, config, allocators, caching, fingerprint, instrumentation, jax, decoupling, migration, tech-debt]
+tags: [architecture, layering, tach, modularity, public-api, semi-public, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, dsl, config, allocators, caching, fingerprint, instrumentation, jax, decoupling, migration, tech-debt]
 created: 2026-06-15
 ---
 
@@ -16,9 +16,11 @@ created: 2026-06-15
 > stage-inspection/dump API, honest combinator typing, plain-code backend builders
 > (no factory-boy), a tightened argument model, and one config. **Scope for the first steps:** restructure
 > `gt4py.next` and the shared infrastructure/utils; **the `eve` package is
-> dissolved into two internal subpackages** — general Python utilities and a
-> toolkit for defining/processing DSL/IR trees — with the `eve` name retired (it
-> has no out-of-tree users, so neither its name nor its public API is preserved);
+> dissolved into two subpackages** — a *semi-public*, self-contained general-purpose
+> Python utility library (usable by downstream projects and extractable into its own
+> distribution later) and an internal toolkit for defining/processing DSL/syntax
+> trees — with the `eve` name retired (it has no out-of-tree users, so neither its
+> name nor its public API is preserved);
 > **`gt4py.cartesian` stays as-is** and is only updated to *consume* the new shared
 > infrastructure — the design lets it be folded into the same layers later.
 
@@ -113,11 +115,20 @@ is small and reviewable:
   layer:
   - **`gt4py._internal.utils`** — general Python utilities (collection/iterator
     helpers, typing helpers, exceptions, pattern matching) with no gt4py knowledge.
-  - **`gt4py._internal.irtools`** — the toolkit for *defining and processing*
+    This subpackage is **semi-public**: downstream projects (e.g. icon4py) may
+    import and use these helpers in their own programs, under a documented but
+    *lighter* stability contract than the core DSL API. Because it sits at the floor
+    of the layering and — by the `tach` rules — imports nothing else inside gt4py, it
+    is a fully self-contained, dependency-isolated unit that can later be **extracted
+    into a standalone general-purpose Python utility distribution** with no
+    untangling; at that point the gt4py facade simply re-exports the external package
+    and downstream imports stay stable. It is surfaced through a thin public facade
+    (`gt4py.utils`) so it has a stable, supported import name from day one.
+  - **`gt4py._internal.dsltools`** — the toolkit for *defining and processing*
     DSL/IR trees: typed node datamodels, the `Node` base, visitors/translators,
     tree walks, symbol-table traits, and template-based code generation. (This is
     the *framework for building* IRs — distinct from any concrete IR such as
-    `next`'s `iterator.ir` and its `ir_utils` helpers.) `irtools` may import
+    `next`'s `iterator.ir` and its `ir_utils` helpers.) `dsltools` may import
     `utils`.
 - **`gt4py.cartesian` is left in its current shape** for now. The only change to
   it is mechanical: repoint its imports/usage at the **shared internal
@@ -139,7 +150,7 @@ lowering/compilation services, over generic utils.
 | **public_api** | The supported import surface. Re-exports only; defines deprecations. | core, infra, utils (to re-export) | `gt4py.next`, `gt4py.storage` (the thin `__init__` facades) |
 | **core** | The gt4py *domain*: field/dimension/domain model, the IRs (FOAST/PAST/ITIR) and their passes, type systems, embedded execution, code generators (IR → source text), and runners that *orchestrate* compile+run. | infrastructure, utils | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, the runner orchestration; plus **`gt4py.cartesian` as-is** (user-facing but tagged *core*, not public_api, because it is the whole implementation rather than a thin facade — until it is split in step 9). |
 | **infrastructure** | DSL-agnostic *services* that know nothing about IR: configuration, caching/hashing, the build system (cmake/ninja + importer), C++ bindings, the pipeline/step machinery, device/buffer/allocator management, instrumentation. | utils | `next/otf/{compilation,binding}`, `next/otf/workflow`, `config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` |
-| **utils** | Domain-agnostic foundations with no gt4py knowledge: general Python helpers, plus a toolkit for defining/processing IR trees (datamodels, node base + traversal, codegen). | (nothing internal) | `utils` (general helpers) and `irtools` (IR/AST toolkit) — **both carved out of today's `eve`**, whose name is retired; `defs` (today's `_core`: scalar/device types, `filecache`, `locking`, `ndarray_utils`) |
+| **utils** | Domain-agnostic foundations with no gt4py knowledge: general Python helpers (a **semi-public**, extraction-ready library — see below), plus a toolkit for defining/processing DSL/syntax trees (datamodels, node base + traversal, codegen). | (nothing internal) | `utils` (general helpers, **semi-public**) and `dsltools` (DSL/syntax-tree toolkit) — **both carved out of today's `eve`**, whose name is retired; `defs` (today's `_core`: scalar/device types, `filecache`, `locking`, `ndarray_utils`) |
 
 **The key structural insight** is the core/infrastructure cut *inside* `otf`.
 Today `otf` is one package that both knows the iterator IR (translation steps)
@@ -178,7 +189,7 @@ utils.
 - **Fewer drops a boundary that is doing work.** Merging public_api into core
   defeats the decoupling outright; merging infrastructure into utils loses the
   core/infra cut *and* conflates DSL-agnostic gt4py *services* (build, allocators,
-  cache) with domain-agnostic *generic Python* (`irtools`, helpers) — different
+  cache) with domain-agnostic *generic Python* (`dsltools`, helpers) — different
   audiences, different churn.
 - **More, as global layers, is premature.** The tempting refinement splits `core`
   into a stack: `runners` on top, the *parallel* `frontend` and `codegens` over the
@@ -208,13 +219,15 @@ src/gt4py/
   __init__.py            # facade: re-exports + deprecation __getattr__
   next/__init__.py       # facade -> gt4py._internal.next (+ named runners/allocators)
   storage/__init__.py    # facade -> infra allocator constructors
+  utils/__init__.py      # facade -> gt4py._internal.utils (semi-public helpers)
   cartesian/            # UNCHANGED for now; only its imports of shared infra are
                         #   updated to gt4py._internal.infra.* (no _internal move yet)
 
   _internal/
-    utils/   irtools/   defs/        # layer: utils
-                                     #   utils   = general Python helpers (from eve)
-                                     #   irtools = IR/AST toolkit (from eve): datamodels,
+    utils/   dsltools/   defs/        # layer: utils
+                                     #   utils   = general Python helpers (from eve);
+                                     #             semi-public + extraction-ready
+                                     #   dsltools = DSL/syntax-tree toolkit (from eve): datamodels,
                                      #             Node base, visitors, trees, traits, codegen
                                      #   defs    = today's _core
     infra/                           # layer: infrastructure
@@ -227,9 +240,12 @@ src/gt4py/
 
 Public names stay **byte-for-byte stable** — `gtx.field_operator`, `gtx.Field`,
 `gtx.gtfn_cpu` — only their *provenance* moves under `_internal`. The `eve` package
-is the one exception: being internal (no out-of-tree users), it gets no public
-facade and is dissolved into `_internal/utils` + `_internal/irtools` with its name
-retired. Concretely, adopt JAX's three conventions for the public surface (see
+is the exception, and it is split **by audience**: its general Python helpers become
+the **semi-public** `_internal/utils`, surfaced under a stable `gt4py.utils` facade
+(a deliberately *lighter* stability contract than the core DSL API, and the seam for
+later extraction into a standalone library); its tree toolkit becomes the
+**internal-only** `_internal/dsltools`, which gets no facade. Both lose the `eve`
+name. Concretely, adopt JAX's three conventions for the public surface (see
 appendix):
 
 - **Explicit re-exports**: `from gt4py._internal.next.ffront.decorator import field_operator as field_operator`
@@ -259,6 +275,11 @@ layer = "public_api"
 [[modules]]
 path = "gt4py.storage"
 layer = "public_api"
+# Semi-public: a stable, supported surface for the general-purpose helpers, but
+# under a lighter stability contract than the core DSL API (see "semi-public utils").
+[[modules]]
+path = "gt4py.utils"
+layer = "public_api"
 
 # --- core: the gt4py.next domain (cartesian joins here later) ---
 [[modules]]
@@ -279,13 +300,13 @@ layer = "infrastructure"
 
 # --- utils: domain-agnostic foundations (today's eve, split + renamed) ---
 # Cross-layer (downward) imports need no declaration; same-layer ones do, so any
-# intra-utils edge is named explicitly (here just irtools -> utils; add others,
+# intra-utils edge is named explicitly (here just dsltools -> utils; add others,
 # e.g. defs -> utils, only if the move turns one up).
 [[modules]]
-path = "gt4py._internal.utils"      # general Python helpers
+path = "gt4py._internal.utils"      # general Python helpers — semi-public, dependency-isolated, extraction-ready
 layer = "utils"
 [[modules]]
-path = "gt4py._internal.irtools"    # IR/AST toolkit (datamodels, nodes, visitors, codegen)
+path = "gt4py._internal.dsltools"    # IR/AST toolkit (datamodels, nodes, visitors, codegen)
 layer = "utils"
 depends_on = ["gt4py._internal.utils"]
 [[modules]]
@@ -300,7 +321,7 @@ the `public_api` layer (so no internal module can depend on the facades), and
 `gt4py.cartesian` and `gt4py._internal.next` sit in the **same** layer with no edge
 between them — and tach requires same-layer edges to be explicit — so a
 `cartesian ↔ next-internals` import is rejected. (The lone intentional same-layer
-edge, `irtools → utils`, is the declared exception above.) `tach` is adopted
+edge, `dsltools → utils`, is the declared exception above.) `tach` is adopted
 incrementally: start permissive, ratchet to `strict` per module as the moves land.
 
 ### Clean up and simplify the infrastructure (especially the `otf` pipeline)
@@ -415,18 +436,18 @@ them — they are not re-entrenched).
    Done now, step 5 then relocates already-clean code. *(Maps to the simplification
    items above; items 1–4 there are the ones to do first.)*
 3. **Create the `gt4py._internal` skeleton.** Add empty layer packages
-   (`_internal/{utils,irtools,defs,infra,next}`) with `__init__.py` only. No moves
+   (`_internal/{utils,dsltools,defs,infra,next}`) with `__init__.py` only. No moves
    yet; establishes the destination and the `tach` module paths.
 4. **Extract the `utils` layer.**
    - 4a. Move `_core` → `_internal/defs`; leave `gt4py._core` as a re-export shim.
    - 4b. Dissolve `eve`: move its general Python helpers (collection/iterator,
      typing, exceptions, pattern matching) → `_internal/utils`, and its IR/AST
      toolkit (datamodels, `Node` base, visitors, trees, traits, codegen) →
-     `_internal/irtools`. Because `eve` is **internal**, the public `gt4py.eve`
+     `_internal/dsltools`. Because `eve` is **internal**, the public `gt4py.eve`
      export in `gt4py/__init__.py` is dropped (optionally a one-release deprecation
      shim re-exporting from the two new locations); update all in-tree `gt4py.eve`
      imports to the new paths. The split can land as two sub-PRs (`utils` first,
-     then `irtools`, which depends on it).
+     then `dsltools`, which depends on it).
 5. **Build the shared `infra` layer — one service per PR**, each leaving a
    re-export shim at the old path *and* updating both `next` and `cartesian` to the
    new import form (this is the only change cartesian receives):
@@ -485,12 +506,15 @@ them — they are not re-entrenched).
   of the shared infra (step 5) is low-risk and is the prerequisite that lets it be
   folded in later (step 9) without any layer rework.
 - **Keep `eve` public vs dissolve it.** Dissolved into `_internal/utils` +
-  `_internal/irtools` (name retired): it has no known out-of-tree users, and the
+  `_internal/dsltools` (name retired): it has no known out-of-tree users, and the
   package mixed two concerns (general helpers vs the IR/AST toolkit) that belong in
   distinct subpackages. Keeping the `eve` name (even internally) would preserve that
-  conflation and invite confusion with concrete IRs. (If an external user surfaces,
-  a thin public facade over the two subpackages can be re-added later — the reverse
-  is harder.)
+  conflation and invite confusion with concrete IRs. The general-helper half
+  (`utils`) is in fact promoted to a **semi-public** surface (a `gt4py.utils` facade)
+  since those helpers are genuinely reusable and meant to be usable by downstream
+  code; the tree toolkit (`dsltools`) stays internal. (If an external user surfaces
+  for the toolkit too, a thin facade over it can be added later — the reverse is
+  harder.)
 - **Merge the cartesian and next pipelines.** Out of scope and risky. The layering
   *enables* sharing the infrastructure layer without forcing a core merge; that can
   proceed independently once the boundary exists.
@@ -510,13 +534,23 @@ them — they are not re-entrenched).
 
 ## Open questions / conflicts
 
-- **`irtools` naming and granularity.** The IR/AST toolkit is named `irtools`
-  (general helpers go to `utils`); both sit in the utils layer with
-  `irtools → utils`. Residual bikeshed: is `irtools` distinct enough from `next`'s
-  `iterator.ir`/`ir_utils`, and is the generic `datamodels` typed-data library
-  general enough to belong in `utils` rather than `irtools`? Leaning: keep
-  `datamodels` with `irtools` (it is the node-definition substrate), revisit the
-  name in review.
+- **`dsltools` naming and granularity.** The tree toolkit is named `dsltools` — the
+  name deliberately **drops the `IR` prefix** (an earlier draft called it `irtools`)
+  so it is not confused with `next`'s *concrete* `iterator.ir`/`ir_utils`, and
+  instead names what it is: a toolkit for defining and processing DSL/syntax trees.
+  General helpers go to `utils`; both sit in the utils layer with `dsltools → utils`.
+  Residual bikeshed: is `dsltools` the best of the candidates (`treelib`, `syntax`,
+  `dsl`, …), and is the generic `datamodels` typed-data library general enough to
+  belong in `utils` rather than `dsltools`? Leaning: keep `datamodels` with
+  `dsltools` (it is the node-definition substrate), revisit the name in review.
+- **Semi-public `utils` surface and stability contract.** `utils` is the one
+  internal subpackage promoted to *semi-public*: downstream projects may import it
+  (via the `gt4py.utils` facade) and use the helpers in their own programs. Open: which
+  helpers belong in the curated semi-public surface (vs. left private behind
+  `_internal`), what deprecation policy the lighter contract implies, and
+  whether/when to spin it out as a standalone general-purpose distribution (and under
+  what name). The layering already keeps it dependency-isolated, so the extraction is
+  mechanical whenever it is wanted.
 - **Is `ffront` semi-public?** Some advanced users build on FOAST/PAST stages.
   Decide whether a curated slice is promoted to public_api or stays core.
 - **Type-system consolidation is enabled, not done.** The four overlapping type

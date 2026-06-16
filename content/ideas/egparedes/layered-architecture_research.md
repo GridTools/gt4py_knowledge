@@ -1,7 +1,7 @@
 ---
 title: "Layered architecture — current-state analysis & references"
 author: egparedes
-tags: [architecture, layering, tach, infrastructure, over-engineering, otf, workflow, dependencies, jax, research]
+tags: [architecture, layering, tach, infrastructure, over-engineering, otf, workflow, dependencies, dsl, semi-public, jax, research]
 created: 2026-06-15
 draft: false
 ---
@@ -43,15 +43,15 @@ gt4py/
 
 Proposed layer assignment (see main proposal for the rule and for the
 **first-steps scope**: `gt4py.next` + shared infra/utils now; the `eve` package is
-dissolved into `utils` + `irtools` (name retired); `gt4py.cartesian` is left as-is
+dissolved into `utils` + `dsltools` (name retired); `gt4py.cartesian` is left as-is
 and only repointed at the shared infra, folded into the layers later):
 
 | Layer | Gets |
 | --- | --- |
-| utils | `utils` (general Python helpers, from `eve`) and `irtools` (IR/AST toolkit, from `eve`: datamodels, `Node` base, visitors, trees, traits, codegen); `defs` (today's `_core`). The `eve` name is **retired**. |
+| utils | `utils` (general Python helpers, from `eve`) — **semi-public** and dependency-isolated for later extraction as a standalone utility library, surfaced via a `gt4py.utils` facade — and `dsltools` (DSL/syntax-tree toolkit, from `eve`: datamodels, `Node` base, visitors, trees, traits, codegen); `defs` (today's `_core`). The `eve` name is **retired**. |
 | infrastructure | `next/otf/{compilation,binding}`, `next/otf/workflow`+`toolchain`, `config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` — shared by next and cartesian |
 | core | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, runner orchestration. *(cartesian's frontend+IR+backends join here in the later step.)* |
-| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (internal) |
+| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`, and the semi-public `gt4py.utils`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (its helpers re-surface as the semi-public `gt4py.utils`, its toolkit becomes internal `dsltools`) |
 
 ## 2. Dependency tangles (why the layering is needed)
 
