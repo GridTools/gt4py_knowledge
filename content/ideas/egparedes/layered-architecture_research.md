@@ -1,7 +1,7 @@
 ---
 title: "Layered architecture — current-state analysis & references"
 author: egparedes
-tags: [architecture, layering, tach, infrastructure, over-engineering, otf, workflow, dependencies, jax, research]
+tags: [architecture, layering, tach, infrastructure, over-engineering, otf, workflow, dependencies, dsl, semi-public, jax, research]
 created: 2026-06-15
 draft: false
 ---
@@ -43,15 +43,15 @@ gt4py/
 
 Proposed layer assignment (see main proposal for the rule and for the
 **first-steps scope**: `gt4py.next` + shared infra/utils now; the `eve` package is
-dissolved into `utils` + `irtools` (name retired); `gt4py.cartesian` is left as-is
+dissolved into `utils` + `dsltools` (name retired); `gt4py.cartesian` is left as-is
 and only repointed at the shared infra, folded into the layers later):
 
 | Layer | Gets |
 | --- | --- |
-| utils | `utils` (general Python helpers, from `eve`) and `irtools` (IR/AST toolkit, from `eve`: datamodels, `Node` base, visitors, trees, traits, codegen); `defs` (today's `_core`). The `eve` name is **retired**. |
+| utils | `gt4py.utils` (general Python helpers, from `eve`) — an **independent, semi-public** library living *outside* `_internal` (no facade), dependency-isolated for later extraction as a standalone distribution — and `_internal/dsltools` (DSL/syntax-tree toolkit, from `eve`: datamodels, `Node` base, visitors, trees, traits, codegen); `_internal/defs` (today's `_core`). The `eve` name is **retired**. |
 | infrastructure | `next/otf/{compilation,binding}`, `next/otf/workflow`+`toolchain`, `config`, allocators (`storage` + `next/custom_layout_allocators`), `next/instrumentation` — shared by next and cartesian |
 | core | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens`, runner orchestration. *(cartesian's frontend+IR+backends join here in the later step.)* |
-| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (internal) |
+| public_api | the `__init__` facades of `gt4py`, `gt4py.next`, `gt4py.storage`. `gt4py.cartesian` stays public but unrestructured; `gt4py.eve` is dropped (its helpers become the standalone, semi-public `gt4py.utils` package in the *utils* layer — not a facade — and its toolkit becomes internal `dsltools`) |
 
 ## 2. Dependency tangles (why the layering is needed)
 
@@ -181,7 +181,7 @@ executor `CachedStep`, the on-disk build cache, and the argument-descriptor cach
 with **three** different key derivations and no documented contract for which is
 used when. `otf/stages.py` alone has `compilation_hash(...)` built on `hash((...))`
 *and* `fingerprint_compilable_program(...)` built on `content_hash((...))` (today an
-`eve` util; lands in `_internal/utils`) for the *same* compilable program; offset
+`eve` util; lands in the standalone `gt4py.utils`) for the *same* compilable program; offset
 providers are hashed by `id()` in at least one path. **Simplification.** One
 canonical content-based fingerprint (GTIR fingerprint, arg
 types, offset-provider *types*, backend-relevant config, gt4py version), shared by
