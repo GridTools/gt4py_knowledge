@@ -200,7 +200,7 @@ clean, natural Thomas-algorithm scans (carry `(c', d')` / scalar), the
 motivating case for a `tridiagonal_solve` primitive (§B.7).
 
 Implications fed back into the proposal: P6, goals 6–7, K-local views
-(§3.1), final-carry surface outputs, and the scan-fusion obligation (§3.8).
+(§3.1), final-carry surface outputs, and the scan-fusion obligation (§3.6).
 
 ### A.8 Production evidence: PMAP Helmholtz preconditioner (`gt4py.cartesian`)
 
@@ -247,7 +247,7 @@ Four load-bearing observations:
 - **Pre-factored coefficients.** `dnmi` (inverse denominators), `ee`,
   `denratm` are computed once outside the solver; only the cheap sweeps run
   per preconditioner application (and `nitr` times per call). A
-  fixed-signature `tridiagonal_solve(a, b, c, d)` (§3.5, §B.7) does not
+  fixed-signature `tridiagonal_solve(a, b, c, d)` (§3.7, §B.7) does not
   apply — the raw scan primitive must stay ergonomic for pre-factored and
   non-standard solves.
 - **Multi-level boundary regions at both ends, end-anchored.**
@@ -268,7 +268,7 @@ Four load-bearing observations:
 Implications fed back into the proposal: end-anchored index conditions and
 the partition-based peeling guarantee (§3.3), guard-refined extents and
 range deduction (§3.1–§3.3, open question 9), `history` carries (§4.6), and
-the §3.5 library caveat. Worked transcription in the examples companion
+the §3.7 library caveat. Worked transcription in the examples companion
 (§7).
 
 ### A.9 Production evidence: GridTools `physics_patterns` (Météo-France, NOAA)
@@ -282,7 +282,7 @@ mixing length):
 
 - *Tropopause level = argmin over K*: a k-loop tracking `(ZTMIN, ITPL)` —
   the running minimum temperature plus its level index. As a scan: final
-  carry only, no per-level output (the fold form, proposal §3.1/§3.9),
+  carry only, no per-level output (the fold form, proposal §3.1/§3.5),
   and the body needs the level *index as a value* to store `ITPL = JK`
   (today's workaround is the hand-rolled in-carry counter of §A.7's
   `metric_fields.py::_compute_param`). As a builtin:
@@ -306,7 +306,7 @@ runtime), accumulating a k-less soil conductance. The vectorized form is a
 full-range reduction masked by `k < nroot` — validating §4.8's
 masked-bound stance, but the mask compares the level index against a
 *field*, which anchored conditions (proposal §3.3) cannot express: it
-needs `gtx.index(KDim)` as a value (proposal §3.9). `zsoil` is again
+needs `gtx.index(KDim)` as a value (proposal §3.5). `zsoil` is again
 gathered at the computed index `nroot`.
 
 **PR #2 — NOAA `microphysics.py`** (SHiELD melting during sedimentation):
@@ -321,7 +321,7 @@ reformulable as a masked bounded-window gather without changing the
 algorithm. Regime 3 of §C.3 *with feedback*; fed back into §4.8 as the
 documented scope boundary.
 
-Implications fed back into the proposal: P7 and §3.9 (vertical reductions,
+Implications fed back into the proposal: P7 and §3.5 (vertical reductions,
 `argmin`, `gtx.index`, the fold form), §4.8 (scope boundary and the
 escape-hatch discussion), and the cross-reference to the computed-index
 gather design. Worked transcriptions in the examples companion (§8–§10).
@@ -582,7 +582,7 @@ differing first/last-level computations.
   Its compiler IR fuses the combined forms into **`screma`** — a
   generalized scan-reduce-map second-order combinator with `redomap`
   (map+reduce) and `scanomap` (map+scan) as special cases; the fusion
-  engine is built around it. The lesson for proposal §3.9: combined
+  engine is built around it. The lesson for proposal §3.5: combined
   scan+reduce is an IR/fusion concern, not a user-facing construct.
   https://hackage.haskell.org/package/futhark-0.20.6/docs/Futhark-IR-SOACS-SOAC.html ,
   https://dl.acm.org/doi/10.1145/2935323.2935326
@@ -605,7 +605,7 @@ differing first/last-level computations.
   (global sums, inner products) and offers a *reproducible* reduction mode
   (padded per-thread partials) — evidence that the weather/climate
   community demands an explicit reproducibility answer, which proposal
-  §3.9 gives as "write the fold".
+  §3.5 gives as "write the fold".
   https://psyclone.readthedocs.io/en/stable/dynamo0p3.html
 
 ## C. Case study: scan + sub-reduce in the vertical
@@ -774,20 +774,20 @@ gist's `box_sedim_naive_func` with the window machinery absorbing
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
 | 1   | Ecosystem converged on `(carry, x) → (carry, y)` with explicit `init`, `reverse`                                                                    | §B.1, §B.3                                   | §3.1 signature; JAX-lowerable embedded                                  |
 | 2   | Slice-level bodies make batching/vectorization implicit and kill promotion magic                                                                    | §B.1 (vmap), §B.6 (LFRic)                    | §3.1 slice typing; §4.1                                                 |
-| 3   | Only `cumsum`/`cumprod` are portable array-API scans; general scan stays a DSL construct                                                            | §B.2                                         | §3.5 library lowering; embedded keeps a k-loop                          |
+| 3   | Only `cumsum`/`cumprod` are portable array-API scans; general scan stays a DSL construct                                                            | §B.2                                         | §3.7 library lowering; embedded keeps a k-loop                          |
 | 4   | General scans are hard to compile; keep core semantics sequential and simple                                                                        | §B.3, §B.4                                   | §2 non-goals; §4.7                                                      |
 | 5   | Interval/vertical regions + loop partitioning are the proven BC mechanism; init-as-state the proven seeding mechanism                               | §B.5, §B.6, §B.9                             | §3.3 three-mechanism design with peeling guarantee                      |
 | 6   | Sequential-k / parallel-columns is the production GPU model; parallel-in-k is a later scheduling concern                                            | §B.6 (ICON, GridTools), §B.5 (rfactor), §B.4 | §2, §4.7                                                                |
-| 7   | Tridiagonal solve should be a named primitive, not a user scan                                                                                      | §B.7                                         | §3.5                                                                    |
+| 7   | Tridiagonal solve should be a named primitive, not a user scan                                                                                      | §B.7                                         | §3.7                                                                    |
 | 8   | Order-m recurrences = first-order scan + m-carry; offset-output reads are sugar over it                                                             | §B.8                                         | §4.6                                                                    |
 | 9   | Bounded scan+sub-reduce = windowed stencil (+ separate cumsum); ring buffers are a compiler optimization, boundary `if`s are skip-masking           | §C.2                                         | §3.4 `WindowOffset` reusing sparse-field machinery                      |
 | 10  | Data-dependent extents trade vectorization for work-efficiency; production vector codes use masked bounds                                           | §C.1, §C.4                                   | §4.8 rejection of `while`-scans                                         |
-| 11  | Production scans degenerate into mega-operators: manual fusion, delay-line/pass-through carry slots, `*_scalar` helper twins, bespoke backend hooks | §A.7                                         | P6; goals 6–7; §3.8 fusion obligation                                   |
+| 11  | Production scans degenerate into mega-operators: manual fusion, delay-line/pass-through carry slots, `*_scalar` helper twins, bespoke backend hooks | §A.7                                         | P6; goals 6–7; §3.6 fusion obligation                                   |
 | 12  | Previous-level *and* lookahead input access is real demand; carry delay lines and external pre-shifts are the workarounds                           | §A.7, §B.8                                   | §3.1 K-local views ("local view vertically")                            |
 | 13  | Inclusive/exclusive/`include_initial` unify first-level BCs with staggered outputs                                                                  | §B.2                                         | §3.3 mechanism 2; `gtx.lib` wrappers                                    |
 | 14  | Surface diagnostics are final carries, today extracted by last-level program slicing                                                                | §A.7                                         | §3.1 `(final_carry, ys)` return                                         |
-| 15  | Production cartesian solves are pre-factored, stride-2, with multi-level end-anchored intervals; a textbook-Thomas library call doesn't cover them  | §A.8                                         | §3.3 anchors + partition guarantee; §3.5 caveat; §4.6 `history` carries |
+| 15  | Production cartesian solves are pre-factored, stride-2, with multi-level end-anchored intervals; a textbook-Thomas library call doesn't cover them  | §A.8                                         | §3.3 anchors + partition guarantee; §3.7 caveat; §4.6 `history` carries |
 | 16  | Interval dispatch makes extents interval-local for free; conditionals-in-body must match this precision via guard refinement                        | §A.8, §A.6                                   | §3.1–§3.3 guard-refined extents; open question 9                        |
-| 17  | Column reductions (integrals, level searches, masked variable depth, column maxima) are real demand; today flag/counter carries or host NumPy       | §A.9, §A.7                                   | P7; §3.9 fixed-op reductions; `gtx.index`                               |
-| 18  | Ecosystem two-tier: order-unspecified fixed-op reduce + order-pinned sequential fold; combined scan+reduce is an IR/fusion concern (`screma`)       | §B.10                                        | §3.9; §3.1 fold form; §3.8 scan→reduce fusion                           |
+| 17  | Column reductions (integrals, level searches, masked variable depth, column maxima) are real demand; today flag/counter carries or host NumPy       | §A.9, §A.7                                   | P7; §3.5 fixed-op reductions; `gtx.index`                               |
+| 18  | Ecosystem two-tier: order-unspecified fixed-op reduce + order-pinned sequential fold; combined scan+reduce is an IR/fusion concern (`screma`)       | §B.10                                        | §3.5; §3.1 fold form; §3.6 scan→reduce fusion                           |
 | 19  | Data-dependent scatter with feedback (SHiELD melting) exists in production; not window-reformulable — a documented scope boundary                   | §A.9                                         | §4.8; §4.1 escape-hatch discussion                                      |
