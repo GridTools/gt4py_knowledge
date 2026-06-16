@@ -35,6 +35,7 @@ Work-in-progress proposals, organized by contributor.
 - [[ideas/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]] — keywords: mesh, halos, unstructured, connectivities, offset-provider, domain-inference, distributed, halo-exchange, prior-art
 - [[ideas/havogt/field-data-protocol|A FieldData protocol for gt4py.next embedded fields]] — keywords: fields, domain, data, protocol, embedded, function-fields, boundary-conditions, materialization, lazy, concat_where, origin, prior-art
 - [[ideas/havogt/boundary-condition-syntax|Frontend syntax sugar for boundary conditions over concat_where]] — keywords: frontend, foast, boundary-conditions, concat_where, regions, syntax-sugar, if-elif-else, match, embedded, cartesian-parity, dsl-design, prior-art
+- [[ideas/havogt/bounds-checking|Bounds checking via domain containment]] — keywords: bounds-checking, domain-inference, trace-shifts, out-of-bounds, validation, concat_where, unstructured, neighbor-tables, compiled-backends, gtfn, dace, embedded, type-system, staggering, static-analysis, runtime-checks, halos, errors
 
 ### egparedes
 
