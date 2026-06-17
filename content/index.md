@@ -30,6 +30,7 @@ Work-in-progress proposals, organized by contributor.
 - [[ideas/havogt/dtype-generic-fields|Dtype-generic fields in gt4py.next]] — keywords: type-system, generics, dtype, frontend, foast, past, monomorphization, field-operators, type-checking
 - [[ideas/havogt/dimension-generic-fields|Generic dimensions and statically typed staggering]] — keywords: type-system, generics, dimensions, staggering, type-checking, mypy, frontend, foast, monomorphization, unstructured
 - [[ideas/havogt/dependent-local-dimensions|Dependent local dimensions and connectivity chains]] — keywords: type-system, dimensions, unstructured, connectivities, local-dimensions, reduction, neighbor-sum, type-checking
+- [[ideas/havogt/open-type-slots|The "open type slot" problem space]] — keywords: type-system, generics, dtype, dimensions, deferred-type, type-variables, monomorphization, scan, foast, frontend
 - [[ideas/havogt/closure-variable-resolution|Closure variable resolution in gt4py.next]] — keywords: frontend, foast, past, closure-variables, name-resolution, constants, builtins, aliasing, gtir, lowering
 - [[ideas/havogt/scan-redesign|Redesign of the vertical scan in gt4py.next]] — keywords: scan, vertical, reduction, boundary-conditions, windows, k-caches, fusion, embedded, jax, frontend
 - [[ideas/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]] — keywords: mesh, halos, unstructured, connectivities, offset-provider, domain-inference, distributed, halo-exchange, prior-art
