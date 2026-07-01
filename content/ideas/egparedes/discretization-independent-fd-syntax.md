@@ -550,6 +550,8 @@ reduce_over[conn](Field, op = min | max | sum)
 
 The categorical claim that makes this honest: (1) and (2) are *both* `reduce(w ⊙ gather(f, conn))` and differ only in weight provenance, so both lower to identical GT4Py.next shape. (3) is a map. (4) and (5) are explicitly *not* in the linear-stencil normal form, which is why they are named separately rather than smuggled in.
 
+This five-category set is the specification for the *compatible C-grid* (ICON/HEVI) baseline. §6.5 extends the escape families with two further staggering-driven primitives that the mesh selects for the other cores: `to_stagger` — a class-(2) placement coercion between two placements of the *same* field (a specialization of the `to[...]` reconstruction of class (2), used for the FV3/PACE two-grid step) — and `solve_elliptic`, a global Helmholtz/Poisson inversion co-equal with `solve_tridiag` (used for PMAP's semi-implicit step). Neither belongs to the C-grid baseline here; both are declared by the mesh's staggering rather than written into this listing.
+
 ### 7.3 Typing rules
 
 Composition of class-(1) operators is checked against the de Rham signatures; a mismatch is an error, except a *known staggering* mismatch, where the required class-(2) coercion is inserted automatically. Pointwise ops require exact co-location and otherwise raise — they never silently interpolate (an implicit reconstruction inside a product is how conservation errors hide). `ddz`/`scan`/`solve_tridiag` are the only operators allowed to change `VLoc` by recurrence. **Halo exchange is never written by the user**; the compiler inserts it after any write to a distributed field that a subsequent wider stencil reads.
@@ -990,8 +992,8 @@ A natural first milestone: implement the surface, typing, normalization, and the
 
 - Deconinck, W., Bauer, P., Diamantakis, M., et al. (2017). *Atlas: A library for numerical weather prediction and climate modelling.* Comput. Phys. Commun. 220, 188–204. doi:10.1016/j.cpc.2017.07.006. https://github.com/ecmwf/atlas
 - GridTools / GT4Py. https://github.com/GridTools/gt4py
-- Dipankar, A., et al. (2026). *Toward exascale climate modelling: a python DSL approach to ICON's (icosahedral non-hydrostatic) dynamical core (icon-exclaim v0.2.0).* Geosci. Model Dev. 19, 713–729. doi:10.5194/gmd-19-713-2026. https://gmd.copernicus.org/articles/19/713/2026/
-- Dahm, J. P. S., et al. (2023). *Pace v0.1: A Python-based Performance-Portable Implementation of the FV3 Dynamical Core.* Geosci. Model Dev. https://egusphere.copernicus.org/preprints/2022/egusphere-2022-943/
+- Dipankar, A., et al. (2026). *Toward exascale climate modelling: a Python DSL approach to ICON's (icosahedral non-hydrostatic) dynamical core (icon-exclaim v0.2.0).* Geosci. Model Dev. 19, 713–729. doi:10.5194/gmd-19-713-2026. https://gmd.copernicus.org/articles/19/713/2026/
+- Dahm, J. P. S., et al. (2023). *Pace v0.1: A Python-based Performance-Portable Implementation of the FV3 Dynamical Core.* Geosci. Model Dev. Discuss. (EGUsphere preprint). https://egusphere.copernicus.org/preprints/2022/egusphere-2022-943/
 - Ubbiali, S., Kühnlein, C., Krieger, N., Papritz, L., Vollenweider, G., et al. (2025). *PMAP — the Portable Model for multi-scale Atmospheric Prediction* (Python/GT4Py port of IFS-FVM; ECMWF / ETH Zürich / CSCS). Model-development page: https://iac.ethz.ch/group/atmospheric-dynamics/focus/model-development.html
 
 ### Other dynamical cores and numerical methods (PACE / FV3, PMAP / IFS-FVM)
