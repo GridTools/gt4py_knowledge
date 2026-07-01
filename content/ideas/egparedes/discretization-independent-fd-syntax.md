@@ -1,13 +1,15 @@
 ---
 title: A discretization-independent surface syntax for finite-difference computations
 author: egparedes
-tags: [finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, dynamical-core, hevi, vertical-solve, miura, atlas, prior-art, dsl-design]
+tags: [finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, pace, pmap, fv3, ifs-fvm, arakawa-staggering, c-grid, d-grid, a-grid, dynamical-core, hevi, vertical-solve, elliptic-solve, mpdata, semi-implicit, miura, atlas, prior-art, dsl-design]
 created: 2026-06-30
 ---
 
 # A Discretization-Independent Surface Syntax for Finite-Difference Computations in Weather and Climate
 
-*A design study: from the computational patterns of atmospheric dynamical cores, through the mathematical notations and programming syntaxes used to express them, to a concrete proposal for a mesh-invariant front-end that lowers to GT4Py.next — applied to the ICON nonhydrostatic dynamical core.*
+*A design study: from the computational patterns of atmospheric dynamical cores, through the mathematical notations and programming syntaxes used to express them, to a concrete proposal for a mesh-invariant front-end that lowers to GT4Py.next. The proposal is developed against the ICON nonhydrostatic dynamical core and then generalized across grid staggerings to cover the other production GT4Py cores — PACE (FV3, D-grid) and PMAP (IFS-FVM, co-located A-grid).*
+
+> **Scope note (this revision).** The first version of this document specialized to ICON's triangular C-grid. But GT4Py is the shared backend of at least three dynamical cores with *different Arakawa staggerings*: ICON (C-grid), PACE / FV3 (D-grid, with C-grid advective winds), and PMAP / IFS-FVM (co-located A-grid finite volume with a 3D semi-implicit solve). The location-typed surface of Proposal 3 quietly *is* a C-grid commitment. This revision makes that relationship explicit (§6.4), generalizes the proposals so staggering becomes a declared, pluggable property rather than a baked-in assumption (§6.5), and works the generalization through PACE and PMAP (§9).
 
 ---
 
@@ -18,11 +20,12 @@ created: 2026-06-30
 3. Mathematical notations (by discretization method)
 4. Programming syntaxes (by discretization method)
 5. Landscape: what exists, and the actual gap
-6. The proposals: a mesh-invariant FD surface
+6. The proposals: a mesh-invariant FD surface (incl. Arakawa staggering and its generalization)
 7. Specification of the user-written surface
-8. Application to the ICON dynamical core
-9. Synthesis and open questions
-10. References
+8. Application to the ICON dynamical core (C-grid)
+9. Beyond ICON: staggering-parametric application to PACE (D-grid) and PMAP (A-grid)
+10. Synthesis and open questions
+11. References
 
 ---
 
@@ -430,6 +433,63 @@ These are the parts a clean exterior-calculus pitch tends to paper over:
 - **Weight strategies are not interchangeable.** Mimetic gives conservation; moment-matched gives order; very few schemes give both. A one-line mesh switch is ergonomically nice but invites silently trading away a conservation law — the choice probably deserves to be loud.
 - **Compile-time weight solves cost something.** Per-point least-squares for high-order unstructured operators is real mesh-build work, and the resulting weight fields are extra runtime memory traffic — the flops-for-bandwidth trade made systematic.
 
+### 6.4 Arakawa staggering and the de Rham commitment
+
+Proposal 3 hides connectivity and placement behind location-typed operators. It is worth being explicit about what those types encode, because it is a *choice of Arakawa grid*, made by construction rather than stated as an assumption. The typing never writes "C-grid" anywhere, yet the form-degree ↔ location assignment it hardcodes —
+
+$$\text{0-form}\to\text{CELL},\qquad \text{velocity 1-form}\to\text{EDGE\_N},\qquad \text{2-form (vorticity)}\to\text{VERTEX}$$
+
+— *is* the Arakawa C-grid. The C-grid is the unique staggering that realizes the discrete de Rham complex: normal velocity on edges is exactly the 1-form DOF, so `grad: CELL→EDGE_N`, `div: EDGE_N→CELL`, `curl: EDGE_T→VERTEX` close into a subcomplex with `div∘curl = 0` and `curl∘grad = 0` holding *structurally*. This is precisely why the conservation and mimetic guarantees earlier were free rather than verified — they are the de Rham identities, and they exist because the staggering is C. "Location typing over de Rham" and "C-grid" are the same commitment stated two ways.
+
+The consequence for the Arakawa family {A, B, C, D, E, Z}, grid by grid:
+
+| Grid | Prognostic velocity DOF | de Rham fit? | Consequence for the surface |
+|---|---|---|---|
+| **C** | normal component on edges (1-form, primal) | native | works verbatim; guarantees structural |
+| **D** | tangential component on edges (1-form, dual) | native (dual) | works with `EDGE_T` prognostic + dual connectivity — a **mesh swap** (primal↔dual), *not* a language change |
+| **A** | full vector, collocated at centres | breaks | velocity is a vector 0-form at `CELL`; operators collapse to collocated centred stencils (`CELL→CELL`), skip the nearest neighbour, admit the 2Δx checkerboard mode → needs stabilization outside the de Rham algebra |
+| **B** | full vector at vertices (corners) | breaks | vector 0-form on the dual; own computational modes; different signatures, no mimetic closure |
+| **E** | rotated B/C hybrid | breaks | no single clean form-degree↔location assignment |
+| **Z** | velocity *diagnosed* from ζ, δ via Helmholtz inversion | out of scope | the velocity 1-form is never a state variable; the core op is a **global elliptic solve**, not a local stencil |
+
+The sharp statement of what Proposal 3 actually unifies over is therefore: **mesh topology, not staggering.** Holding the staggering fixed at C, the typing is genuinely agnostic to triangles vs. hexagons vs. quads and to structured vs. unstructured — that is the real content of the structured/unstructured unification. It does *not* range over the Arakawa family; choosing a discrete de Rham subcomplex *fixes* the staggering, and there is no single operator set that gives all Arakawa grids at once. In mimetic-FE terms this is the familiar fact that RT0+DG0 (a compatible pair) recovers the C-grid, while equal-order/collocated elements (the A-grid analogue) are an *incompatible* pair needing pressure stabilization.
+
+Crucially, the C-grid restriction is **principled, not accidental**: the C/D branch is where the good wave dispersion and the absence of a stationary checkerboard mode live, so baking the surface into the de Rham staggering bakes it into the staggering with the desirable properties. Supporting A/B is not a small generalization of the *same* language; it is a separate, less clean instantiation with collocated operators and explicit computational-mode stabilization, forfeiting the structural conservation argument that was the main reason to type by location.
+
+### 6.5 Generalizing the surface to arbitrary staggerings
+
+The generalization is not "make the operators clever enough to span all grids" — no such operator set exists. It is to **factor the surface so the staggering becomes a declared, pluggable property that selects an operator family**, with only the compatible branch enjoying the free guarantees. Three changes:
+
+**(a) Separate the abstract form-degree algebra from concrete placement.** The surface is written in form degrees ($0$-form scalar, $1$-form flux/velocity, $2$-form); a mesh-supplied **placement map** $P:\text{form-degree}\to(\text{HLoc},\text{component})$ realizes them. The staggering *is* the placement map:
+
+```python
+# staggering is a declared mesh property that selects a placement map + operator family
+mesh = Mesh.unstructured(grid, staggering="C")   # P(0)=CELL, P(1)=EDGE_N, P(2)=VERTEX
+mesh = Mesh.unstructured(grid, staggering="D")   # P(0)=CELL, P(1)=EDGE_T, P(2)=VERTEX (dual)
+mesh = Mesh.structured(shape, staggering="A")    # P(0)=P(1)=P(2)=CELL  (collocated → degenerate)
+```
+
+The user still writes `div(grad(phi))` in form-degree terms; the placement map decides where each form lives and which connectivity the operators use. C and D differ only in the map (primal vs. dual 1-form), which is why the D-grid "just works."
+
+**(b) Two operator families, selected by placement compatibility.**
+
+- *Compatible staggerings (C, D)* — the placement map is injective across form degrees, so the operators are the de Rham incidence×Hodge and form an exact subcomplex. Conservation and the mimetic identities are structural. The specification of §7 applies verbatim; the mesh chooses primal (C) or dual (D).
+- *Collocated / incompatible staggerings (A, B)* — the placement map is non-injective (multiple form degrees at one location). The operators degenerate into **collocated reconstructions** (Green–Gauss or least-squares gradient; FV divergence over reconstructed face values), and the mesh **must additionally supply a stabilization primitive** — a filter, a pressure/divergence stabilization, or the non-oscillatory correction that the advection scheme (e.g. MPDATA) already carries. The de Rham guarantees are *replaced* by explicit stabilization, exactly as the numerics themselves do it.
+
+An important precision on conservation: collocated finite-volume schemes (FVM/PMAP) remain **locally mass-conserving** because conservation comes from the *flux form*, not from the staggering — the same reason Miura upwind stays conservative in §8.8. What the A-grid loses is the discrete de Rham structure (`div curl = 0`, the skew-adjoint grad/div pairing) and gains computational modes; it does **not** lose mass conservation. The generalization must state this cleanly rather than implying A-grids are "non-conservative."
+
+**(c) Extend the escape families with two staggering-driven primitives.** The §7 escape set (`ddz`, `scan`, `solve_tridiag`, `reduce_over`) is sufficient for ICON's HEVI but not for the other cores:
+
+```
+to_stagger[S2](Field @ placement S1) -> Field @ placement S2   # inter-placement reconstruction
+solve_elliptic(operator, rhs) -> Field                          # global Helmholtz/Poisson inversion
+```
+
+- `to_stagger` covers the **CD / two-grid** case (FV3/PACE), where the model advances D-grid winds but reconstructs C-grid advective winds each half-step. In the surface this is not a new grid but *two placements of velocity plus a class-(2) reconstruction between them* — which the existing `EDGE_N`/`EDGE_T` distinction already almost expresses.
+- `solve_elliptic` covers the **co-located semi-implicit** case (PMAP/IFS-FVM, and the Z-grid): a 3D semi-implicit FV step needs a global elliptic (Helmholtz) solve for the pressure update, delegated to a Krylov/GCR backend. ICON's HEVI deliberately *avoids* this (only per-column tridiagonal); FVM *requires* it. So the escape-hatch set is genuinely model-dependent, and the generalized surface must expose the global elliptic solve as a first-class primitive — co-equal with `solve_tridiag`, not a bolt-on.
+
+The honest framing of the generalization: **the surface spans the Arakawa family, but only the compatible C/D branch retains the free structural guarantees; the collocated A/B branch trades them for explicit stabilization and a global elliptic solve — which is exactly the trade the underlying numerics make.** A staggering kwarg that *transparently* retargeted across A/C/D would be a lie; a staggering declaration that *selects a whole operator family and escape-hatch set* is honest and is what the three real GT4Py cores actually need.
+
 ---
 
 ## 7. Specification of the user-written surface
@@ -528,7 +588,7 @@ Not in the language: time-stepping control flow, MPI/partitioning, the *adjoint*
 
 ---
 
-## 8. Application to the ICON dynamical core
+## 8. Application to the ICON dynamical core (C-grid)
 
 ICON (ICOsahedral Nonhydrostatic) solves the fully compressible nonhydrostatic Euler equations on a triangular Arakawa C-grid (Lorenz vertical grid), with vector-invariant horizontal momentum, a two-time-level predictor–corrector scheme, and **horizontally-explicit / vertically-implicit (HEVI)** integration — the vertical sound-wave terms are implicit (a per-column tridiagonal Thomas solve), everything else explicit. The dynamical core is substepped `ndyn_substeps` (default 5) times per model step.
 
@@ -804,11 +864,78 @@ Invoked as named primitives with mesh-supplied weights (model-specific, *not* de
 
 ---
 
-## 9. Synthesis and open questions
+## 9. Beyond ICON: staggering-parametric application to PACE (D-grid) and PMAP (A-grid)
+
+ICON exercises the *compatible* branch of §6.5 in its purest form. The two other production GT4Py cores land on different points of the Arakawa spectrum and therefore exercise the generalization's other branches. Both are real GT4Py users (Dahm et al. 2023 for PACE; Ubbiali et al. 2025 for PMAP), so this is not a hypothetical portability claim.
+
+### 9.1 The three cores, side by side
+
+| Model (GT4Py port) | Numerics | Grid topology | Arakawa staggering | §6.5 branch | Distinctive primitive needed |
+|---|---|---|---|---|---|
+| **ICON** (icon-exclaim) | mimetic FD/FV, vector-invariant, HEVI | triangular icosahedral (unstructured) | **C** | compatible (primal) | `solve_tridiag` (per-column) |
+| **PACE** (Pace / FV3GFS, SHiELD) | finite-volume, Lin–Rood, vertically-Lagrangian | cubed-sphere (structured, 6 tiles) | **D** (+ C advective winds) | compatible (dual) + two-grid | `to_stagger` (D↔C each half-step) |
+| **PMAP** (IFS-FVM) | finite-volume, MPDATA, 3D semi-implicit | octahedral / quad (structured **and** unstructured) | **A** (co-located) | collocated + stabilized | `solve_elliptic` (global Helmholtz) + stabilization |
+
+### 9.2 PACE / FV3 — the D-grid and the two-grid step
+
+FV3 is the compatible branch on the *dual*: its prognostic winds are the **D-grid** tangential components, and it advances them with a vertically-Lagrangian finite-volume scheme (Lin 2004; Putman & Lin 2007). The surface change from ICON is a placement swap, not a language change:
+
+```python
+mesh = Mesh.structured(cubed_sphere, staggering="D")   # P(1) = EDGE_T
+u_d  = Field[EDGE_T, FULL]                              # prognostic D-grid wind
+div_d = div(u_d)                                        # same operator, dual connectivity
+```
+
+`div`, `grad`, `curl` retain their signatures and their structural guarantees — the placement map routes them through dual connectivity. What FV3 adds is the **two-grid (CD) step**: each acoustic sub-step reconstructs C-grid advective winds from the D-grid state, computes fluxes on the C-grid, then updates the D-grid winds. That is exactly the `to_stagger` escape:
+
+```python
+u_c = to_stagger[EDGE_N](u_d)          # (2) D→C reconstruction of advective winds
+mass_flx = u_c * to[EDGE_N](rho)        # fluxes built on the C-grid placement
+ddt_rho  = -div(mass_flx)               # divergence closes on cells — conservative
+# ... update u_d from the C-grid fluxes (vorticity-flux form)
+```
+
+The point: the CD structure is not a new grid type in the surface — it is *two placements of one velocity field plus a reconstruction between them*, which the `EDGE_N`/`EDGE_T` distinction already almost expresses. FV3's mass conservation is the same flux-form argument as ICON's (the `div` telescopes); the vertically-Lagrangian vertical coordinate is an additional per-column remap that slots in as a `scan`-class primitive (a Lagrangian-to-Eulerian reconstruction), orthogonal to the horizontal algebra just like ICON's tridiagonal solve.
+
+The honest strain for PACE is different from ICON's: FV3's stencils are wide (PPM reconstruction, corner transport upwind) and its cubed-sphere edges/corners carry special-cased metric terms, so a large fraction of the operators are *reconstructions* rather than mimetic `div`/`grad`. The Pace port already reports that the FV3 core "suits the two stencil classes GT4Py targets well, but not exactly" — the surface would inherit precisely that: the conservation skeleton stays clean, the reconstructions and the panel-edge handling are the quarantined, mesh-supplied part.
+
+### 9.3 PMAP / IFS-FVM — the collocated branch
+
+PMAP is the port of ECMWF's IFS-FVM: a non-hydrostatic, locally-conserving, **finite-volume** core with **co-located (A-grid)** variables on the median-dual of the octahedral grid, MPDATA non-oscillatory advection, and a **3D semi-implicit** time integration (Smolarkiewicz et al. 2016; Kühnlein et al. 2019). It is the collocated branch of §6.5, and it is the case that most stresses the abstraction — deliberately, because it is where the de Rham guarantees do *not* apply.
+
+```python
+mesh = Mesh.unstructured(octahedral, staggering="A", stabilization=MPDATA())
+u = Field[CELL, FULL]   # full velocity vector, collocated at nodes (0-form)
+```
+
+Three consequences fall directly out of the generalization:
+
+1. **Operators degenerate to collocated reconstructions.** `grad(phi)` is no longer an edge difference but a node-centred Green–Gauss / least-squares gradient over the neighbour ring; `div(u)` is a node-centred FV divergence over reconstructed face values. These are class-(2)/class-(1) *reconstructions*, not the mimetic incidence×Hodge, and the surface must select them from the `staggering="A"` declaration.
+2. **Conservation is retained, de Rham structure is not.** FVM is locally conserving via the flux form — so the surface's conservation check still holds — but `div∘curl = 0` and the skew-adjoint pairing do not, and the checkerboard mode is controlled by MPDATA's non-oscillatory correction, supplied as the mesh `stabilization` primitive. Stating this precisely matters: PMAP is conservative *and* collocated; the two are not in tension.
+3. **The elliptic solve is first-class.** The 3D semi-implicit step forms a global Helmholtz problem for the pressure update, solved by a preconditioned GCR/Krylov iteration. Where ICON's HEVI reduces the implicit coupling to independent per-column tridiagonals (`solve_tridiag`), PMAP needs `solve_elliptic` over the full 3D domain — a global, communication-heavy operation the surface delegates to a Krylov backend but must expose as a primitive:
+
+```python
+# semi-implicit pressure update (schematic)
+rhs   = assemble_helmholtz_rhs(state, dt)     # from divergence of provisional momentum
+dpi   = solve_elliptic(helmholtz_operator, rhs)   # global GCR — the FVM analogue of Thomas
+u     = u - dt * grad(dpi)                     # collocated gradient correction
+```
+
+This is the sharpest illustration of why the escape-hatch set must be *staggering-dependent*: the same document that treats `solve_tridiag` as co-equal with the mimetic algebra for ICON must treat `solve_elliptic` as co-equal for PMAP. A surface that only offered the column solve would express ICON's implicit coupling and be unable to express PMAP's at all.
+
+### 9.4 What the three-core view establishes
+
+The generalization is validated less by elegance than by the fact that three independently-developed cores, already sharing GT4Py as a backend, populate exactly the three branches the design predicts: compatible-primal (ICON/C), compatible-dual-plus-two-grid (PACE/D+C), and collocated-stabilized-plus-elliptic (PMAP/A). The mimetic conservation skeleton — flux-form `div`, and mass conservation as a telescoping-flux property — is common to all three and stays clean in the surface. The staggering declaration is what selects placement, operator family, stabilization, and the implicit-solve primitive; it is not a cosmetic kwarg but the switch that picks which of three genuinely different discrete worlds the same form-degree source compiles into. That the switch is *loud* — that A-grid forfeits de Rham structure and demands `solve_elliptic`, visibly — is a feature: it keeps the surface from promising a portability it cannot honestly deliver.
+
+---
+
+## 10. Synthesis and open questions
 
 The argument of this document, compressed: the computational patterns of atmospheric dynamical cores reduce to a single `gather-weight-reduce` normal form whose only mesh-dependence is the provenance of support and weights; that normal form is the shape of a GT4Py.next field operator; therefore a mesh-invariant, location-typed exterior/vector-calculus surface can lower to GT4Py.next with the structured/unstructured distinction confined to a mesh-build weight-generation step. The pieces to build this all exist — Decapodes (surface), PyDEC/CombinatorialSpaces and Medusa/`rbf` (the two weight strategies), GT4Py.next (the portable backend), Atlas (the data structure) — but in disconnected communities; the contribution would be integration, realized most cheaply as a thin front-end over GT4Py.next rather than a greenfield DSL.
 
 Applied to ICON, the surface expresses the mimetic conservation skeleton and the thermodynamics cleanly and portably, while honestly quarantining the model-specific numerics (RBF reconstructions, terrain corrections, Miura flux, the column solver) as named primitives. The clean/quarantined boundary becomes *explicit in the code* rather than tangled — which is the practical value even before any performance portability is realized.
+
+The design has two orthogonal unification axes, and it is worth keeping them distinct. The first — **mesh topology** (structured ↔ unstructured) — is genuinely transparent: the same source compiles to Cartesian offsets or connectivity reductions with the difference confined to weight provenance. The second — **grid staggering** (A/B/C/D/Z) — is *not* transparent and should not pretend to be: the location typing of Proposal 3 is a C-grid commitment, its dual gives D, and the collocated grids (A/B) and the vorticity-divergence grid (Z) require a different operator family, a stabilization primitive, and in the semi-implicit case a global elliptic solve. §6.5 makes staggering a declared property that *selects* an operator family and escape-hatch set rather than a kwarg that silently retargets, and §9 shows the three production GT4Py cores — ICON (C), PACE (D+C), PMAP (A) — populating exactly the three branches this predicts. The common core across all of them is the flux-form conservation skeleton; that is the invariant worth building the surface around.
 
 Open questions worth flagging:
 
@@ -816,12 +943,13 @@ Open questions worth flagging:
 - **The emitter's real integration point.** Emitting field-operator *source* is the legible representation; the production path (generated source vs. building GTIR/ITIR via the builder API) determines whether domain inference and halo-insertion come for free — that is the part of the design sketched rather than pinned.
 - **Production-grade moment-matched weights.** Neighbour selection, polynomial conditioning, and hyperviscosity stabilization for high-order unstructured operators are a Medusa-sized subproject, not the dozen illustrative lines.
 - **Differentiable halo exchange.** Out of scope here (forward-only), but the adjoint of a halo exchange is its *transpose* (cotangents scatter-add onto owning ranks), not the same exchange run backward — a known trap for hand-rolled wrappers and a prerequisite for any AD-through-dycore ambition.
+- **Staggering as a family selector, not a kwarg.** The clean part of the generalization is the compatible C/D branch (a placement-map swap). The open engineering question is the collocated branch: how much of the A-grid operator family (Green–Gauss/least-squares gradients, FV divergence over reconstructed faces) and its stabilization can be shared machinery versus per-model, and whether `solve_elliptic` can present a backend-agnostic interface (GCR, multigrid, FFT-on-structured) the way `solve_tridiag` does for the column case. PACE's two-grid `to_stagger` is the easiest non-ICON target; PMAP's global elliptic solve is the hardest and the one that most tests whether "co-equal escape hatch" is real or aspirational.
 
 A natural first milestone: implement the surface, typing, normalization, and the mimetic backend over the existing ICON connectivities, and diff the emitted (D3) field operators against the hand-written ICON4Py stencils for structural equality. That is checkable against ground truth, and validates the central claim before any moment-matched or structured-backend work is layered on.
 
 ---
 
-## 10. References
+## 11. References
 
 ### Domain, equations, and the ICON dynamical core
 
@@ -862,8 +990,19 @@ A natural first milestone: implement the surface, typing, normalization, and the
 
 - Deconinck, W., Bauer, P., Diamantakis, M., et al. (2017). *Atlas: A library for numerical weather prediction and climate modelling.* Comput. Phys. Commun. 220, 188–204. doi:10.1016/j.cpc.2017.07.006. https://github.com/ecmwf/atlas
 - GridTools / GT4Py. https://github.com/GridTools/gt4py
-- EXCLAIM (ETH Zürich). *Toward Exascale Climate Modelling: A Python DSL Approach to ICON.* EGUsphere preprint (2025). https://egusphere.copernicus.org/preprints/2025/egusphere-2025-4808/
-- Dahm, J. P. S., et al. (2023/2022). *Pace v0.1: A Python-based Performance-Portable Implementation of the FV3 Dynamical Core.* EGUsphere/GMD. https://egusphere.copernicus.org/preprints/2022/egusphere-2022-943/
+- Dipankar, A., et al. (2026). *Toward exascale climate modelling: a python DSL approach to ICON's (icosahedral non-hydrostatic) dynamical core (icon-exclaim v0.2.0).* Geosci. Model Dev. 19, 713–729. doi:10.5194/gmd-19-713-2026. https://gmd.copernicus.org/articles/19/713/2026/
+- Dahm, J. P. S., et al. (2023). *Pace v0.1: A Python-based Performance-Portable Implementation of the FV3 Dynamical Core.* Geosci. Model Dev. https://egusphere.copernicus.org/preprints/2022/egusphere-2022-943/
+- Ubbiali, S., Kühnlein, C., Krieger, N., Papritz, L., Vollenweider, G., et al. (2025). *PMAP — the Portable Model for multi-scale Atmospheric Prediction* (Python/GT4Py port of IFS-FVM; ECMWF / ETH Zürich / CSCS). Model-development page: https://iac.ethz.ch/group/atmospheric-dynamics/focus/model-development.html
+
+### Other dynamical cores and numerical methods (PACE / FV3, PMAP / IFS-FVM)
+
+- Lin, S.-J. (2004). *A "vertically Lagrangian" finite-volume dynamical core for global models.* Mon. Weather Rev. 132, 2293–2307. (FV3; D-grid, vertically-Lagrangian.)
+- Putman, W. M., Lin, S.-J. (2007). *Finite-volume transport on various cubed-sphere grids.* J. Comput. Phys. 227, 55–78.
+- Harris, L. M., Lin, S.-J. (2013). *A two-way nested global-regional dynamical core on the cubed-sphere grid.* Mon. Weather Rev. 141, 283–306. (FV3 C-grid/D-grid two-grid step.)
+- Colella, P., Woodward, P. R. (1984). *The Piecewise Parabolic Method (PPM) for gas-dynamical simulations.* J. Comput. Phys. 54, 174–201.
+- Smolarkiewicz, P. K., Deconinck, W., Hamrud, M., Kühnlein, C., et al. (2016). *A finite-volume module for simulating global all-scale atmospheric flows.* J. Comput. Phys. 314, 287–304. (IFS-FVM; co-located A-grid, MPDATA.)
+- Kühnlein, C., Deconinck, W., Klein, R., Malardel, S., et al. (2019). *FVM 1.0: A nonhydrostatic finite-volume dynamical core for the IFS.* Geosci. Model Dev. 12, 651–676. doi:10.5194/gmd-12-651-2019.
+- Smolarkiewicz, P. K., Margolin, L. G. (1998). *MPDATA: A finite-difference solver for geophysical flows.* J. Comput. Phys. 140, 459–480. (Non-oscillatory advection / stabilization.)
 - Ben-Nun, T., et al. (2022). *Productive Performance Engineering for Weather and Climate Modeling with Python.* arXiv:2205.04148.
 - Gysi, T., et al. (2021). *Domain-Specific Multi-Level IR Rewriting for GPU: The Open Earth Compiler.* ACM TACO. doi:10.1145/3469030. arXiv:2005.13014. https://github.com/spcl/open-earth-compiler
 - *A shared compilation stack for distributed-memory parallelism in stencil DSLs.* arXiv:2404.02218 (2024).
@@ -887,4 +1026,4 @@ A natural first milestone: implement the surface, typing, normalization, and the
 
 ---
 
-*Document compiled from a design conversation. Code is illustrative pseudocode / sketch-level GT4Py.next, intended to convey structure rather than to compile unmodified; API spellings (e.g. `Field[[...], wpfloat]`, offset providers) vary by GT4Py.next version. Equation signs and index conventions for the vertical operators follow a self-consistent choice and should be pinned against `mo_solve_nonhydro` before use.*
+*Document compiled from a design conversation. Code is illustrative pseudocode / sketch-level GT4Py.next, intended to convey structure rather than to compile unmodified; API spellings (e.g. `Field[[...], wpfloat]`, offset providers) vary by GT4Py.next version. Equation signs and index conventions for the vertical operators follow a self-consistent choice and should be pinned against `mo_solve_nonhydro` before use. The staggering characterizations of the three GT4Py cores (ICON = C-grid; PACE/FV3 = D-grid with C-grid advective winds; PMAP/IFS-FVM = co-located A-grid) are drawn from the model literature cited in §11; the surface-level treatment of their operator families and escape hatches (§6.5, §9) is a design proposal, not a description of existing code — no such staggering-parametric front-end exists today (§5).*
