@@ -38,7 +38,7 @@ Work-in-progress proposals, organized by contributor.
 
 ### egparedes
 
-- [[ideas/egparedes/layered-architecture|A layered architecture for gt4py with enforced public/internal decoupling]] — keywords: architecture, layering, tach, modularity, public-api, semi-public, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, dsl, config, allocators, caching, fingerprint, instrumentation, jax, decoupling, migration, tech-debt
+- [[ideas/egparedes/layered-architecture|A layered architecture for gt4py with enforced public/internal decoupling]] — keywords: architecture, layering, tach, modularity, public-api, semi-public, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, dsl, config, allocators, caching, fingerprint, compiled-program, factory-boy, instrumentation, jax, decoupling, migration, tech-debt
 - [[ideas/egparedes/discretization-independent-fd-syntax|A discretization-independent surface syntax for finite-difference computations]] — keywords: finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, pace, pmap, fv3, ifs-fvm, arakawa-staggering, c-grid, d-grid, a-grid, dynamical-core, hevi, vertical-solve, elliptic-solve, mpdata, semi-implicit, miura, atlas, prior-art, dsl-design
 
 <!-- Entry format (index only the main proposal; link appendices/implementations
