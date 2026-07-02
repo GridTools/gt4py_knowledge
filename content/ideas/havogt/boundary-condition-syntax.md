@@ -197,7 +197,11 @@ the innermost false field). The variable(s) assigned in every branch become the 
 (`iterator/transforms/concat_where/canonicalize_domain_argument.py`).
 
 **Embedded.** This is the hard case (see the corollary). A bare `if KDim == 0:` cannot be
-AST-rewritten without types, and it cannot run natively. Options, none free:
+AST-rewritten without types, and it cannot run *correctly* natively — worse, today it runs
+**silently wrong** (verified): `Domain` defines no `__bool__`, so `bool(KDim == 0)` falls back to
+`Sequence.__len__` and is always `True` — the true branch is unconditionally taken. (`Field`
+already raises "The truth value of a Field is ambiguous"; `Domain` deserves the same guard
+regardless of what happens to this proposal.) Options, none free:
 (a) **compiled-only** — reject domain-`if` in embedded with a clear error (acceptable in that
 cartesian regions are *also* compiled-only, but a real regression for a DSL that sells embedded);
 (b) **`Domain.__bool__` raises** a guiding error ("use `concat_where`/`cases`, or a backend") so
@@ -215,7 +219,7 @@ forcing each branch boolean and "remember[ing] what decisions it has made so tha
 different decisions on future executions"; the functional-pearl form is *thermometer
 continuations* (Koppel, Scherer, Solar-Lezama 2018: "replaying the entire computation from the
 start, guiding it using a recording"). No array DSL is known to do this — array DSLs either refuse
-`bool()` or rewrite — which makes it novel, not disqualified.
+`bool()` or rewrite — which makes it novel, not disqualified. Worked example below.
 
 **Pros.** Most natural, most Pythonic, zero new vocabulary; reuses `IfStmt` wholesale; reads
 exactly like the icon4py `# TODO: Use if-else statement instead` wish; collapses the *nested*
@@ -227,6 +231,73 @@ irreducible at the AST level, forcing compiled-only, a marker (which erases the 
 replay (which costs one execution per region and leans on a purity contract). Mixing scalar
 control-flow `if` and domain `if` in one operator is confusing. `else` is effectively mandatory
 (the result must be defined everywhere).
+
+### Option (d) in detail: replay execution, worked
+
+Concrete trace for the three-region example at the top of this proposal. The decorator wraps the
+embedded call in a recorder; during a run, `Domain.__bool__` consults an oracle that returns
+`True` at a fresh fork and forced values on scheduled re-runs:
+
+| run | forced decisions | `bool(KDim == 0)` | `bool(KDim == nlev)` | body computes |
+| --- | --- | --- | --- | --- |
+| 1 | *(none)* | `True` | *not reached* | `wgt = top(z_ifc)` |
+| 2 | `[False]` | `False` | `True` | `wgt = surface(z_ifc)` |
+| 3 | `[False, False]` | `False` | `False` | `wgt = inner(z_ifc)` |
+
+Folding the run results over the recorded conditions produces exactly the nest a user writes
+today, with first-match semantics:
+
+```python
+concat_where(KDim == 0, run1, concat_where(KDim == nlev, run2, run3))
+```
+
+The whole recorder is small (sketch):
+
+```python
+def replay(body, *args):
+    runs = []                                    # (decisions, result) per completed run
+
+    def explore(forced):
+        decisions = []
+        def oracle(domain):                      # Domain.__bool__ delegates here during a run
+            take = forced[len(decisions)] if len(decisions) < len(forced) else True
+            decisions.append((domain, take))
+            return take
+        with _domain_bool_oracle(oracle):
+            result = body(*args)                 # one ordinary embedded execution
+        runs.append((decisions, result))
+        for i in range(len(forced), len(decisions)):          # schedule unexplored siblings
+            prefix = [t for _, t in decisions[:i]] + [False]  # fresh forks defaulted True → flip
+            if not _path_is_empty(decisions[:i], flipped=prefix[-1]):
+                explore(prefix)
+
+    explore([])
+    return _fold(runs)    # nested concat_where over the decision tree
+```
+
+Properties, concretely:
+
+- **Cost is nonempty paths, not conditions.** An `if`/`elif`/…/`else` chain with *n* conditions
+  has *n+1* paths → *n+1* runs, each computing only its own branch — about the same total field
+  work as the equivalent `concat_where` nest, which also evaluates every branch eagerly. The real
+  overhead is re-running the *shared prefix* of the body once per run; hoisting shared code above
+  the first domain-`if` (or memoizing field ops) mitigates.
+- **Empty-path pruning kills the exponential.** *Sequential* domain-`if`s fork multiplicatively
+  (two paint-style `if`s → 4 paths), but a scheduled path whose accumulated region is empty —
+  intersect the forks' domains, complements for `False` decisions — is skipped *without running*
+  (`_path_is_empty` above). For disjoint regions (`KDim == 0`, `KDim == nlev`) the both-`True`
+  path is empty, so paint-style sequential `if`s stay at n+1 runs. The genuinely multiplicative
+  case — a `KDim` condition nested with an `EdgeDim` condition — yields exactly the nonempty
+  sub-boxes that any lowering of a 2-D decomposition must produce anyway.
+- **Scalar control flow just works.** A real `bool` (`if limited_area:`) is not intercepted; each
+  run takes its actual branch. icon4py's `apply_diffusion_to_vn` pattern (a Python flag selecting
+  between two `concat_where`s) replays only the domain forks inside the taken scalar branch.
+  Early `return` inside a branch works — each run's return value is its path's result — and tuple
+  returns make it multi-output for free (assembled tuple-wise).
+- **The contract is purity + determinism.** The body must produce the same fork sequence given the
+  same decisions (field operators satisfy this by design); side effects repeat once per run.
+  Failures can be reported *with the failing path's region attached* ("while computing the
+  `KDim == nlev` branch…") — arguably better error UX than today's single execution.
 
 ---
 
@@ -581,13 +652,64 @@ frontend would have to accept `class` statements inside field operators. Best tr
 **existence proof** — the bar any AST-rewrite statement form must beat — rather than a
 recommendation.
 
+### Multiple output fields
+
+First, the general fact: `concat_where` already accepts **tuples** (and named collections) as
+branches — icon4py assigns `(rho, theta) = concat_where(cond, helper(...), (0, 0))`, and the
+compiled pipeline has a dedicated `expand_tuple_args` transform — so *every* proposal here is
+multi-output-capable by passing tuple branches. The painting forms even get it in plain Python:
+`rho[K[0]], theta[K[0]] = helper(...)` is ordinary tuple assignment with subscript targets. What
+`class`-body capture adds are three distinct *groupings*:
+
+**Tuple values** (cheapest — the "class" binds a tuple; unpack after the block):
+
+```python
+class rho_theta(concatenated):
+    this[lateral_zone] = _compute_horizontal_advection_of_rho_and_theta(...)  # returns a tuple
+    this[...]          = (broadcast(0.0, ...), broadcast(0.0, ...))
+rho, theta = rho_theta
+```
+
+**Field-major** (named handles via `this.<name>`; the result is a named collection):
+
+```python
+class fields(concatenated):
+    this.rho[K[0]]        = rho_top(...)
+    this.rho[K[1:nlev]]   = rho_inner(...)
+    this.theta[K[0]]      = theta_top(...)
+    this.theta[K[1:nlev]] = theta_inner(...)
+return fields.rho, fields.theta
+```
+
+**Region-major** (a nested class per region, plain assignments per field — no other proposal has
+this grouping). The namespace observes tuple unpacking from a single helper call, which is exactly
+the real icon4py shape (one helper computing several fields for one zone):
+
+```python
+class fields(concatenated):
+    class lateral(region[start_edge_lb_7 <= EdgeDim]):
+        rho, theta = _compute_horizontal_advection_of_rho_and_theta(...)
+    class elsewhere(otherwise):
+        rho   = broadcast(0.0, ...)
+        theta = broadcast(0.0, ...)
+rho, theta = fields.rho, fields.theta
+```
+
+Even `class lateral(region[...])` with a non-class base works at pure runtime: PEP 560
+`__mro_entries__` substitutes a marker base and the original domain stays readable via
+`__orig_bases__` — the same machinery `Generic[T]` bases use. Two additional cautions: the
+namespace must **not** auto-create unknown names (loads fall through it to the enclosing
+scope/globals — that is exactly how `z_ifc` and `top` resolve, so swallowing misses would break
+name resolution), and coverage checking becomes per-field (every field defined on every region,
+or a per-field default).
+
 ---
 
 ## Design axes (how the proposals compare)
 
 | Proposal | Python feature | Form | AST-rewritable marker | Embedded cost | Precedence | Default / else | Risk |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **P1** `if`/`elif` | `if` / `IfStmt` | statement | **no** (≡ scalar `if`) | ✗ (needs types) | first-match | `else:` | med–high |
+| **P1** `if`/`elif` | `if` / `IfStmt` | statement | **no** (≡ scalar `if`) | ✗ (types) / replay | first-match | `else:` | med–high |
 | **P2** `match` | PEP 634 match | statement | weak (guards) / yes (custom pat) | ✗ | first-match | `case _:` | high |
 | **P3** `with region` | `with` / ctx-mgr | statement | **yes** | via rewrite | first-match | `otherwise()` | medium |
 | **P4** builder | varargs / dict / chain | expression | n/a (already a call) | **✓ free** | first-match | `default=` / `...` | **low** |
