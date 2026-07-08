@@ -60,7 +60,7 @@ content/
    should remain in this state until reviewed by a human (could be the author);
    `reviewed` means at least one person (e.g. the author) has reviewed the content;
    `final` means the idea/proposal is concrete enough to drive an implementation,
-   but it should  still be reviewed by another person.
+   but it should still be reviewed by another person.
 3. Before writing, **skim the index and existing proposals** for overlap; link
    related/conflicting documents with `[[wikilinks]]` and call out the conflict
    explicitly. Surfacing conflicts is the whole point of this repo.

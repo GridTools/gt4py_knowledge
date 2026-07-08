@@ -254,8 +254,9 @@ goal; the primary goal is external allocation itself.
 
 ## Related work
 
-- DaCe external-memory test that motivates the approach: the shaped project
-  referenced in this directory, `[[Shaped_Project-External_Memory_For_Dace_Arrays]]`.
+- DaCe external-memory test that motivates the approach: see DaCe external-memory
+  test that motivates the approach: [`external_memory_test.py`](external_memory_test.py)
+  in this directory.
 - gt4py layering and build-cache direction:
   [[personal/egparedes/layered-architecture|A layered architecture for gt4py with
   enforced public/internal decoupling]] — this change lives in the
@@ -270,4 +271,4 @@ goal; the primary goal is external allocation itself.
 
 ## Appendix
 
-- [[Shaped_Project-External_Memory_For_Dace_Arrays|Shaped project brief]]
+- [[external-memory-for-dace-arrays_shaped-project|Shaped project brief]]
