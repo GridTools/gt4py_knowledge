@@ -14,12 +14,18 @@ for keeping [`content/index.md`](content/index.md) useful.
 
 ```
 content/
-  index.md          # landing page = keyworded, hierarchical index
-  ideas/<person>/   # per-contributor proposals (+ appendices, implementations)
-  accepted/         # broadly-accepted-but-not-yet-implementable proposals
-  templates/        # idea template (not published)
-quartz.config.ts    # Quartz config (set baseUrl to the Pages URL)
-quartz.layout.ts    # Quartz layout
+  index.md              # landing page = keyworded, hierarchical index
+  personal/
+    <person>/                   # one subdirectory per contributor
+      <proposal>.md             # a single-file proposal/idea
+      <proposal>/               # a multi-file proposal/idea (REQUIRED if >1 file)
+        <proposal>.md           # the main proposal/idea
+        <proposal>_research.md  # optional appendix: background, research, prior art
+        <proposal>_<topic>.md   # optional further appendices
+  shared/               # proposals accepted and implementation-ready (only touch with PR review)
+  templates/            # idea template (NOT published — see ignorePatterns)
+quartz.config.ts        # Quartz config (set baseUrl to the Pages URL)
+quartz.layout.ts        # Quartz layout
 .github/workflows/deploy.yml   # build (clone Quartz + copy content) & deploy to Pages
 ```
 
