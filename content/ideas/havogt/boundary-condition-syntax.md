@@ -1,7 +1,7 @@
 ---
 title: Frontend syntax sugar for boundary conditions over concat_where
 author: havogt
-tags: [frontend, foast, boundary-conditions, concat_where, regions, syntax-sugar, if-elif-else, match, embedded, cartesian-parity, dsl-design, prior-art]
+tags: [frontend, foast, boundary-conditions, concat_where, regions, syntax-sugar, if-elif-else, match, embedded, cartesian-parity, dsl-design, prior-art, python-versions, peps, piece-algebra, metaclass, replay]
 created: 2026-06-16
 ---
 
@@ -16,10 +16,11 @@ created: 2026-06-16
 > nicer but cannot run in **embedded** mode (the field-operator body executes as plain Python,
 > and a `Domain` condition is not a `bool`). `gt4py.cartesian` solves the analogous problem with
 > a `with horizontal(region[...])` statement, but only because cartesian has **no embedded mode**
-> — it always AST-parses. This note proposes **seven** surface syntaxes that desugar to
+> — it always AST-parses. This note proposes **nine** surface syntaxes that desugar to
 > `concat_where` and discusses which can serve *both* execution modes. The unifying trick: a
 > construct works in embedded **iff it desugars to `concat_where` calls before the body runs** —
-> which is possible exactly when the construct carries an unambiguous *syntactic marker*.
+> which is possible exactly when the construct carries an unambiguous *syntactic marker* (with two
+> notable loopholes: `class`-body capture and replay execution).
 
 > **Status**: draft proposal / design exploration. Drafted with AI assistance, including a
 > web survey of how other DSLs encode boundary conditions and a survey of real `concat_where`
@@ -29,7 +30,9 @@ created: 2026-06-16
 > [[ideas/havogt/boundary-condition-syntax_research|Cross-DSL prior-art survey]] — how
 > Devito, FEniCS/Firedrake, Halide, Lift/RISE, YASK, GridTools/STELLA/Dawn, Pochoir, ExaSlang,
 > Regent/Legion, Chapel, NEMO/FMS, Mathematica, Rust/Swift/Python `match`, and APL encode
-> "interior vs boundary". · [[ideas/havogt/boundary-condition-syntax_icon4py-survey|icon4py
+> "interior vs boundary", plus a verified Python language-feature watch (3.14/3.15/3.16, dead
+> PEPs) and precedents for the implementation tricks (AST/bytecode rewriting, tracer-refuses-bool,
+> replay, `__prepare__`). · [[ideas/havogt/boundary-condition-syntax_icon4py-survey|icon4py
 > concat_where survey]] — ~40 real call sites, the chained/nested idioms, and the inline
 > `# TODO: Use if-else statement instead`.
 
@@ -154,6 +157,8 @@ And a corollary that discriminates the proposals:
 > unmistakable. A bare `if <cond>:` is **not** — it is syntactically identical to a scalar
 > `if param > 0:`, so it cannot be rewritten without types, which are only available in the
 > compiled path. This makes `if`/`match` the *nicest-looking* but *hardest-to-unify* options.
+> Two loopholes bypass the rule without a marker or a rewrite: **replay execution**
+> (Proposal 1d) and **`class`-body capture** (Proposal 9).
 
 The cross-DSL survey ([[ideas/havogt/boundary-condition-syntax_research|appendix]]) confirms the
 two archetypes worth stealing from: **domain-splicing** systems (YASK `IF_DOMAIN`, Devito
@@ -192,23 +197,107 @@ the innermost false field). The variable(s) assigned in every branch become the 
 (`iterator/transforms/concat_where/canonicalize_domain_argument.py`).
 
 **Embedded.** This is the hard case (see the corollary). A bare `if KDim == 0:` cannot be
-AST-rewritten without types, and it cannot run natively. Options, none free:
+AST-rewritten without types, and it cannot run *correctly* natively — worse, today it runs
+**silently wrong** (verified): `Domain` defines no `__bool__`, so `bool(KDim == 0)` falls back to
+`Sequence.__len__` and is always `True` — the true branch is unconditionally taken. (`Field`
+already raises "The truth value of a Field is ambiguous"; `Domain` deserves the same guard
+regardless of what happens to this proposal.) Options, none free:
 (a) **compiled-only** — reject domain-`if` in embedded with a clear error (acceptable in that
 cartesian regions are *also* compiled-only, but a real regression for a DSL that sells embedded);
 (b) **`Domain.__bool__` raises** a guiding error ("use `concat_where`/`cases`, or a backend") so
-embedded fails loudly rather than wrongly; (c) require a tiny disambiguating marker, e.g.
-`if domain(KDim == 0):`, which restores a syntactic hook for the rewrite (but then it is no longer
-"just `if`").
+embedded fails loudly rather than wrongly — the exact strategy of JAX
+(`TracerBoolConversionError`, pointing to `lax.cond`) and `torch.fx` ("symbolically traced
+variables cannot be used as inputs to control flow"); (c) require a tiny disambiguating marker,
+e.g. `if domain(KDim == 0):`, which restores a syntactic hook for the rewrite (but then it is no
+longer "just `if`"); (d) **replay (multi-shot) execution** — run the body once per branch
+decision, with `Domain.__bool__` returning a *recorded real `bool`* (`True` on one run, `False` on
+the next), then assemble the per-run results with `concat_where` over the recorded conditions.
+This is legal Python (`__bool__` must return an actual `bool` — and here it does), needs no source
+access, and works today; it costs one body execution per region and is sound only because field
+operators are pure. Precedent: concolic testers like CrossHair repeatedly re-execute a function,
+forcing each branch boolean and "remember[ing] what decisions it has made so that it can make
+different decisions on future executions"; the functional-pearl form is *thermometer
+continuations* (Koppel, Scherer, Solar-Lezama 2018: "replaying the entire computation from the
+start, guiding it using a recording"). No array DSL is known to do this — array DSLs either refuse
+`bool()` or rewrite — which makes it novel, not disqualified. Worked example below.
 
 **Pros.** Most natural, most Pythonic, zero new vocabulary; reuses `IfStmt` wholesale; reads
 exactly like the icon4py `# TODO: Use if-else statement instead` wish; collapses the *nested*
 cases cleanly; matches Mathematica `Piecewise`'s ordered first-true model. Good for multi-statement
 branches.
 
-**Cons.** The embedded story is genuinely bad — the scalar-`if` vs domain-`if` ambiguity is
-irreducible at the AST level, forcing either compiled-only or a marker (which erases the
-elegance). Mixing scalar control-flow `if` and domain `if` in one operator is confusing. `else`
-is effectively mandatory (the result must be defined everywhere).
+**Cons.** The embedded story is the hard part — the scalar-`if` vs domain-`if` ambiguity is
+irreducible at the AST level, forcing compiled-only, a marker (which erases the elegance), or
+replay (which costs one execution per region and leans on a purity contract). Mixing scalar
+control-flow `if` and domain `if` in one operator is confusing. `else` is effectively mandatory
+(the result must be defined everywhere).
+
+### Option (d) in detail: replay execution, worked
+
+Concrete trace for the three-region example at the top of this proposal. The decorator wraps the
+embedded call in a recorder; during a run, `Domain.__bool__` consults an oracle that returns
+`True` at a fresh fork and forced values on scheduled re-runs:
+
+| run | forced decisions | `bool(KDim == 0)` | `bool(KDim == nlev)` | body computes |
+| --- | --- | --- | --- | --- |
+| 1 | *(none)* | `True` | *not reached* | `wgt = top(z_ifc)` |
+| 2 | `[False]` | `False` | `True` | `wgt = surface(z_ifc)` |
+| 3 | `[False, False]` | `False` | `False` | `wgt = inner(z_ifc)` |
+
+Folding the run results over the recorded conditions produces exactly the nest a user writes
+today, with first-match semantics:
+
+```python
+concat_where(KDim == 0, run1, concat_where(KDim == nlev, run2, run3))
+```
+
+The whole recorder is small (sketch):
+
+```python
+def replay(body, *args):
+    runs = []                                    # (decisions, result) per completed run
+
+    def explore(forced):
+        decisions = []
+        def oracle(domain):                      # Domain.__bool__ delegates here during a run
+            take = forced[len(decisions)] if len(decisions) < len(forced) else True
+            decisions.append((domain, take))
+            return take
+        with _domain_bool_oracle(oracle):
+            result = body(*args)                 # one ordinary embedded execution
+        runs.append((decisions, result))
+        for i in range(len(forced), len(decisions)):          # schedule unexplored siblings
+            prefix = [t for _, t in decisions[:i]] + [False]  # fresh forks defaulted True → flip
+            if not _path_is_empty(decisions[:i], flipped=prefix[-1]):
+                explore(prefix)
+
+    explore([])
+    return _fold(runs)    # nested concat_where over the decision tree
+```
+
+Properties, concretely:
+
+- **Cost is nonempty paths, not conditions.** An `if`/`elif`/…/`else` chain with *n* conditions
+  has *n+1* paths → *n+1* runs, each computing only its own branch — about the same total field
+  work as the equivalent `concat_where` nest, which also evaluates every branch eagerly. The real
+  overhead is re-running the *shared prefix* of the body once per run; hoisting shared code above
+  the first domain-`if` (or memoizing field ops) mitigates.
+- **Empty-path pruning kills the exponential.** *Sequential* domain-`if`s fork multiplicatively
+  (two paint-style `if`s → 4 paths), but a scheduled path whose accumulated region is empty —
+  intersect the forks' domains, complements for `False` decisions — is skipped *without running*
+  (`_path_is_empty` above). For disjoint regions (`KDim == 0`, `KDim == nlev`) the both-`True`
+  path is empty, so paint-style sequential `if`s stay at n+1 runs. The genuinely multiplicative
+  case — a `KDim` condition nested with an `EdgeDim` condition — yields exactly the nonempty
+  sub-boxes that any lowering of a 2-D decomposition must produce anyway.
+- **Scalar control flow just works.** A real `bool` (`if limited_area:`) is not intercepted; each
+  run takes its actual branch. icon4py's `apply_diffusion_to_vn` pattern (a Python flag selecting
+  between two `concat_where`s) replays only the domain forks inside the taken scalar branch.
+  Early `return` inside a branch works — each run's return value is its path's result — and tuple
+  returns make it multi-output for free (assembled tuple-wise).
+- **The contract is purity + determinism.** The body must produce the same fork sequence given the
+  same decisions (field operators satisfy this by design); side effects repeat once per run.
+  Failures can be reported *with the failing path's region attached* ("while computing the
+  `KDim == nlev` branch…") — arguably better error UX than today's single execution.
 
 ---
 
@@ -246,6 +335,12 @@ explicitly rejects range patterns and steers users to **guards** (`case x if 0 <
 ceremony*, and the subject/scrutinee is awkward (you "match" a `Dimension`, then guard on a
 `Domain`). The `case _:` wildcard is a clean default, and the structure *looks* exhaustive, but
 Python won't check exhaustiveness.
+
+Three verified sharp edges (CPython grammar, unchanged through 3.15): a region literal cannot even
+be *written* in a pattern — `case K[0]:` is a **SyntaxError** (value patterns must be dotted
+names); a bare `case K:` does not compare against `K`, it silently **captures** the subject into a
+new local named `K`; and `case range(0, 5):` parses but is a *class/isinstance* pattern, not a
+range test. Every road leads to guards or custom `__match_args__` classes.
 
 **Compiled.** Needs a new `visit_Match` in FOAST lowering `case`→nested `concat_where`. The
 custom-pattern variant additionally needs the frontend to understand the region pattern classes.
@@ -372,6 +467,16 @@ embedded it can even be done at runtime: make the accumulator a small builder wh
 `__setitem__(domain, val)` runs `self._f = concat_where(domain, val, self._f)`; though typing
 `return wgt` then needs care, the AST-rewrite route is cleaner.)
 
+**Variant — annotated-assignment marker.** `wgt: at[K[0]] = top(z_ifc)` puts the region in the
+*annotation* slot instead of the subscript. A verified language fact makes this attractive:
+annotations on local variables inside functions "have no runtime effect — they're discarded at
+compile-time" (PEP 526; reconfirmed unchanged by PEP 649 for Python 3.14+). The marker is
+therefore free at runtime, purely syntactic, and cannot collide with real element indexing the
+way `wgt[<domain>]` can. The trap: *un*-rewritten embedded silently executes the plain assignment
+(each line overwrites the whole field), so the decorator must rewrite unconditionally — annotated
+assignments must never fall through. `wgt: Annotated[fa.CellKField[wpfloat], K[0]] = ...` is the
+type-checker-clean spelling, at the price of verbosity.
+
 **This collapses icon4py's dominant idiom 1:1.** The three-line
 `wgt_fac_c = concat_where(...); wgt_fac_c = concat_where(...); wgt_fac_c = concat_where(...)` chain
 *is already* "paint region after region onto one variable", read inside-out. Domain-subscript
@@ -416,6 +521,13 @@ spelling out comparisons. Any proposal here can use it (e.g. Proposal 1's `if K[
 returns a callable; calling it with the branches matches branch *i* to region *i* by position and
 folds to nested `concat_where`. It is an **expression** (a call), so embedded works for free; for
 compiled the frontend recognizes the `concat[...](...)` builtin.
+
+**Language notes.** Subscripts cannot take keyword arguments — PEP 637 was **rejected** — so
+`default=` can never move inside the brackets (`concat[K[0], default=inner]` is a SyntaxError
+forever); it must stay a call argument as shown. Star-unpacking inside subscripts is legal since
+Python 3.11 (PEP 646), so computed region lists work: `concat[*regions](*branches)`. The Draft
+PEP 718 ("subscriptable functions") would, if it ever lands, make the subscript-then-call shape a
+typed first-class citizen.
 
 **Pros.** The most compact N-way form — every region and the whole splice in one expression; no
 statement/SSA/scope concerns; embedded-safe with no AST rewrite; the `K[1:nlev]` slice is far nicer
@@ -471,17 +583,141 @@ partially-built `result` through the scope is non-trivial.
 
 ---
 
-## Design axes (how the seven compare)
+## Proposal 8 — Restrict-then-concatenate: a piece algebra
+
+*(Python feature (mis)used: `field[domain]` restriction plus a variadic `concat(...)` — regions attached to values instead of listed separately.)*
+
+```python
+wgt = concat(
+    top(z_ifc)[K[0]],
+    inner(z_ifc)[K[1:nlev]],
+    surface(z_ifc)[K[nlev]],
+)
+```
+
+**Mechanism.** `field[region]` is the restriction embedded fields already support (`field[domain]`
+slices a field to a sub-domain), and `concat(*pieces)` concatenates fields with disjoint, adjacent
+domains. This is arguably not sugar *over* `concat_where` but a decomposition *of* it: the embedded
+`_concat_where` already works exactly this way internally (restrict both branches, then `_concat`
+the slices), and `concat_where(d, t, f) ≡ concat(t[d], f[~d])`. An expression → embedded works
+essentially for free; compiled needs a `concat` builtin and restriction typing.
+
+**Pros.** Fixes Proposal 6's positional-alignment hazard: each region is attached to its value, so
+nothing can silently misalign. Mathematically clean — restriction + disjoint union, the same mental
+model as assembling one array from disjoint labeled pieces in xarray (`combine_by_coords`).
+Partition semantics, no precedence. Reuses existing restriction syntax; no new statement forms.
+
+**Cons.** Scalar branches need a wrapper (`broadcast(0.0)[K[0]]` — a bare scalar has no
+`__getitem__`). Naive embedded computes each branch on its full domain before restricting (same as
+today; compiled domain inference avoids the waste). The tempting operator spelling `piece | piece`
+is **blocked**: `__or__` on fields already means elementwise boolean `or`, so overloading it by
+domain-disjointness would be ambiguous — the variadic `concat(...)` call is the honest form.
+Coverage/adjacency errors surface only at assembly time.
+
+---
+
+## Proposal 9 — `class`-body capture (the no-rewrite statement block)
+
+*(Python feature (mis)used: PEP 3115 metaclass `__prepare__` namespaces — the only Python statement whose body executes against a namespace the library controls.)*
+
+```python
+@field_operator
+def boundary(z_ifc: fa.CellKField[wpfloat]) -> fa.CellKField[wpfloat]:
+    class wgt(concatenated):            # ← not actually a class: binds the assembled field
+        this[K[0]]      = top(z_ifc)
+        this[K[1:nlev]] = inner(z_ifc)
+        this[K[nlev]]   = surface(z_ifc)
+    return wgt
+```
+
+**Mechanism.** Documented runtime semantics, no AST access anywhere: a metaclass's `__prepare__`
+returns the mapping used as the class-body namespace and observes **every name binding, in order**
+(verified: rebindings included) — this is exactly how `enum` tracks member definition order via its
+`_EnumDict` and how Django's declarative `Model` bodies work. The namespace can inject magic names
+(`this`), and the metaclass call may return **any object** — the `class` statement just binds the
+result, so `wgt` becomes the assembled *field*, not a class. Multi-statement regions work as
+ordinary temporaries in the body, and class bodies can read enclosing function locals (`z_ifc`
+resolves).
+
+**Pros.** The **only statement-block form that works in embedded with no AST rewrite at all** —
+pure PEP 3115 semantics. Ordered observation supports painting or partition; multi-statement
+regions are natural; `class wgt(concatenated):` is also a crisp syntactic marker for the compiled
+path.
+
+**Cons.** Deeply weird: a `class` that isn't a class will surprise every reader, linter, and type
+checker (`this` is undefined to mypy; the binding's type is wrong). One verified scoping trap: a
+name assigned *inside* the class body and read before its assignment falls back to *globals*, not
+the enclosing function scope — shadowing an argument inside the block misbehaves. The compiled
+frontend would have to accept `class` statements inside field operators. Best treated as an
+**existence proof** — the bar any AST-rewrite statement form must beat — rather than a
+recommendation.
+
+### Multiple output fields
+
+First, the general fact: `concat_where` already accepts **tuples** (and named collections) as
+branches — icon4py assigns `(rho, theta) = concat_where(cond, helper(...), (0, 0))`, and the
+compiled pipeline has a dedicated `expand_tuple_args` transform — so *every* proposal here is
+multi-output-capable by passing tuple branches. The painting forms even get it in plain Python:
+`rho[K[0]], theta[K[0]] = helper(...)` is ordinary tuple assignment with subscript targets. What
+`class`-body capture adds are three distinct *groupings*:
+
+**Tuple values** (cheapest — the "class" binds a tuple; unpack after the block):
+
+```python
+class rho_theta(concatenated):
+    this[lateral_zone] = _compute_horizontal_advection_of_rho_and_theta(...)  # returns a tuple
+    this[...]          = (broadcast(0.0, ...), broadcast(0.0, ...))
+rho, theta = rho_theta
+```
+
+**Field-major** (named handles via `this.<name>`; the result is a named collection):
+
+```python
+class fields(concatenated):
+    this.rho[K[0]]        = rho_top(...)
+    this.rho[K[1:nlev]]   = rho_inner(...)
+    this.theta[K[0]]      = theta_top(...)
+    this.theta[K[1:nlev]] = theta_inner(...)
+return fields.rho, fields.theta
+```
+
+**Region-major** (a nested class per region, plain assignments per field — no other proposal has
+this grouping). The namespace observes tuple unpacking from a single helper call, which is exactly
+the real icon4py shape (one helper computing several fields for one zone):
+
+```python
+class fields(concatenated):
+    class lateral(region[start_edge_lb_7 <= EdgeDim]):
+        rho, theta = _compute_horizontal_advection_of_rho_and_theta(...)
+    class elsewhere(otherwise):
+        rho   = broadcast(0.0, ...)
+        theta = broadcast(0.0, ...)
+rho, theta = fields.rho, fields.theta
+```
+
+Even `class lateral(region[...])` with a non-class base works at pure runtime: PEP 560
+`__mro_entries__` substitutes a marker base and the original domain stays readable via
+`__orig_bases__` — the same machinery `Generic[T]` bases use. Two additional cautions: the
+namespace must **not** auto-create unknown names (loads fall through it to the enclosing
+scope/globals — that is exactly how `z_ifc` and `top` resolve, so swallowing misses would break
+name resolution), and coverage checking becomes per-field (every field defined on every region,
+or a per-field default).
+
+---
+
+## Design axes (how the proposals compare)
 
 | Proposal | Python feature | Form | AST-rewritable marker | Embedded cost | Precedence | Default / else | Risk |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **P1** `if`/`elif` | `if` / `IfStmt` | statement | **no** (≡ scalar `if`) | ✗ (needs types) | first-match | `else:` | med–high |
+| **P1** `if`/`elif` | `if` / `IfStmt` | statement | **no** (≡ scalar `if`) | ✗ (types) / replay | first-match | `else:` | med–high |
 | **P2** `match` | PEP 634 match | statement | weak (guards) / yes (custom pat) | ✗ | first-match | `case _:` | high |
 | **P3** `with region` | `with` / ctx-mgr | statement | **yes** | via rewrite | first-match | `otherwise()` | medium |
 | **P4** builder | varargs / dict / chain | expression | n/a (already a call) | **✓ free** | first-match | `default=` / `...` | **low** |
 | **P5** paint `out[d]=` | `__setitem__` | statement | **yes** | via rewrite / builder | **last-paint** | base `out[...]` | medium |
 | **P6** `concat[..](..)` | `__getitem__` + `__call__` | expression | n/a (already a call) | **✓ free** | **partition** | `default=` / tiling | low–med |
 | **P7** `with concatenated()` | `with` + `__setitem__` | statement | **yes** | via rewrite / builder | partition / last-paint | `otherwise()` / base | med–high |
+| **P8** `concat(pieces...)` | restriction `[]` + varargs call | expression | n/a (already a call) | **✓ free** | partition | full-domain piece | low |
+| **P9** `class`-body capture | metaclass `__prepare__` (PEP 3115) | statement | yes (`class X(concatenated)`) | **✓ free (no rewrite)** | partition / last-paint | base paint | high (weirdness) |
 
 ## How regions compose: first-match, last-paint, partition
 
@@ -522,7 +758,7 @@ matches a point wins. This is Proposals 1/2/4 (and a hand-written `concat_where`
 | --- | --- | --- | --- |
 | **first-match** | allowed | the *first* matching region | `if`/`elif`/`else` (P1), `match` (P2), `cases(...)` (P4), a `concat_where` nest |
 | **last-paint** | allowed | the *last* write | `out[domain] = ...` (P5) |
-| **partition** | none (by construction) | — (each point once) | `concat[...](...)`, `with concatenated()` (P6/P7) |
+| **partition** | none (by construction) | — (each point once) | `concat[...](...)` (P6), `with concatenated()` (P7), `concat(pieces...)` (P8), `class` body (P9) |
 
 first-match and last-paint are both ordered-with-overlap but opposite in priority; partition is
 unordered-without-overlap with a coverage requirement. The open design question is which single
@@ -532,10 +768,12 @@ model to commit to — shipping several risks leaving users unsure which write w
 
 A pragmatic, layered path rather than a single winner:
 
-1. **Ship an embedded-safe expression core first — Proposal 4 (`cases(...)`) and/or Proposal 6
-   (`concat[...](...)`).** Both fold to `concat_where` with no AST surgery and run in embedded
-   immediately; `cases` reads best for a handful of labelled regions, `concat[...]` for a compact
-   partition of a column. The statement sugars can desugar *into* this core.
+1. **Ship an embedded-safe expression core first — Proposal 4 (`cases(...)`), Proposal 6
+   (`concat[...](...)`), and/or Proposal 8 (`concat(pieces...)`).** All fold to `concat_where`
+   with no AST surgery and run in embedded immediately; `cases` reads best for a handful of
+   labelled regions, `concat[...]` for a compact positional partition, and pieces (P8) when each
+   value should carry its own region (no alignment hazard). The statement sugars can desugar
+   *into* this core.
 2. **Make Proposal 7 (`with concatenated() as result:`) the headline statement sugar.** It subsumes
    the painting of Proposal 5 and the region blocks of Proposal 3, fixes Proposal 5's seed/SSA
    ambiguity with an explicit scope, and its marker yields one decoration-time AST rewrite serving
@@ -548,13 +786,44 @@ A pragmatic, layered path rather than a single winner:
    plus a loud `Domain.__bool__` error (or an explicit `if domain(...)` marker) in embedded.
 5. **Keep Proposal 3 (`with region`) as the cartesian-parity option**, and treat **Proposal 2
    (`match`) as lowest priority** — Python's missing range patterns make the plain form a more
-   verbose `if`/`elif`; only the custom-matchable-region variant is interesting, and it collapses
-   into Proposal 4/6.
+   verbose `if`/`elif` (and `case K[0]:` is a SyntaxError); only the custom-matchable-region
+   variant is interesting, and it collapses into Proposal 4/6. **Proposal 9 (`class`-body
+   capture)** stays documented as an existence proof — the one no-rewrite statement block — not a
+   recommendation.
 
 In every form a region is an arbitrary `Domain`-valued expression — a single comparison, an
 `&`/`|` combination, a multi-dimensional condition, or a named index bound — and the sugar composes
 the regions into the appropriate `concat_where` structure, so the user writes a flat sequence of
 regions and never hand-builds the nest.
+
+## Python feature watch (3.14, 3.15, and beyond)
+
+Statuses verified against peps.python.org and the 3.14/3.15 "What's New" (2026-07); links and
+quotes in the [[ideas/havogt/boundary-condition-syntax_research|research appendix]].
+
+- **Shipped in 3.14.** **Template strings (PEP 750, Final)**: interpolations evaluate eagerly, but
+  each `Interpolation` also carries the **source text** of its expression — Python's first
+  sanctioned quasi-quotation channel. A region DSL could exploit it
+  (`concat(t"{K[0]}: {top(z_ifc)}")` — values eager for embedded, expression text available to a
+  compiled path), but code-in-strings is a readability regression; noted and rejected.
+  **Deferred annotations (PEP 649/749, Final)** change nothing here: function-local annotations
+  "have no runtime effect — they're discarded at compile-time", which is exactly what the
+  Proposal 5 annotated-assignment variant relies on.
+- **Shipped in 3.15.** `lazy import` (PEP 810; a soft keyword special to import statements — not
+  reusable by libraries) and star-unpacking in comprehensions (PEP 798). Nothing that helps region
+  dispatch.
+- **3.16 pipeline.** Nothing syntax-level accepted yet. Drafts worth watching: **PEP 718**
+  subscriptable functions — would make Proposal 6's `concat[...](...)` a typed first-class shape;
+  PEP 653 (match semantics) — still no range patterns anywhere.
+- **Dead ends that bound the design space.** **PEP 335** (overloadable booleans): *Rejected*, and
+  `__bool__` returning a non-`bool` raises `TypeError` — so `if`/`and`/`or` can never be
+  intercepted, only type-lowered (compiled), replayed (Proposal 1d), or rewritten. **PEP 637**
+  (keywords in subscripts): *Rejected*. **PEP 638** (syntactic macros): Draft, dormant since 2020 —
+  no macro escape hatch is coming. **PEP 3150 / PEP 403** (block-as-expression): Deferred
+  indefinitely. **Range patterns for `match`**: no PEP exists.
+
+Net: nothing shipped or on the horizon changes the core rule — statement forms need a syntactic
+marker + rewrite (or replay); expression forms work today.
 
 ## Prior art (summary; details in the appendix)
 
@@ -579,14 +848,20 @@ From the [[ideas/havogt/boundary-condition-syntax_research|cross-DSL survey]]:
   an orthogonal "the function is told where it sits" idea.
 
 The recurring cross-system idiom is an ordered list of `(region predicate → branch)` pairs with a
-default — which is precisely Proposals 4 and 6, and what Proposals 1/3/5/7 are sugar over.
+default — which is precisely Proposals 4, 6, and 8, and what Proposals 1/3/5/7/9 are sugar over.
 
 ## Open questions / conflicts
 
 - **Embedded vs compiled parity is the whole game.** The cleanest unification is a decoration-time
-  AST rewrite to `concat_where` for the marker-bearing forms (3, 5, custom-pattern 2). Is adding an
-  `ast`-rewriting pass to the `next` frontend acceptable, given `next` deliberately avoids
-  cartesian's "parse, never run" model? This is the central decision.
+  AST rewrite to `concat_where` for the marker-bearing forms (3, 5, 7, custom-pattern 2). Is adding
+  an `ast`-rewriting pass to the `next` frontend acceptable, given `next` deliberately avoids
+  cartesian's "parse, never run" model? (Precedent that it is production-viable: pytest rewrites
+  every collected test module's AST at import time, and gt4py.cartesian itself is
+  `inspect.getsource` + `ast.parse`.) Proposal 9 shows a no-rewrite statement block exists, at the
+  price of class-statement weirdness. This is the central decision.
+- **Purity contract for replay.** Option (d) of Proposal 1 re-executes the body once per region;
+  that is sound only if field-operator bodies are pure and deterministic. Today that is a de-facto
+  convention — is it a contract we can state and enforce?
 - **Precedence model.** Which single composition model — first-match, last-paint, or partition
   (see *How regions compose* above) — should the sugar commit to? Shipping more than one risks
   leaving users unsure which write wins; pick one, or make the difference syntactically obvious.

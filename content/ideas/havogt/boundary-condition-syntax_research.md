@@ -1,7 +1,7 @@
 ---
 title: "Cross-DSL prior art for boundary-condition syntax"
 author: havogt
-tags: [boundary-conditions, regions, prior-art, dsl-design, stencil, fem, pattern-matching, halide, devito, gridtools, research]
+tags: [boundary-conditions, regions, prior-art, dsl-design, stencil, fem, pattern-matching, halide, devito, gridtools, research, python-versions, peps, ast-rewriting, replay, metaclass]
 created: 2026-06-16
 ---
 
@@ -307,6 +307,100 @@ interior, `1 ¯1` = a corner) — the kernel is *told its boundary offset* and c
 
 ---
 
+## 5. Python itself: shipped, upcoming, and rejected (verified 2026-07)
+
+Statuses verified against `peps.python.org` (PEP index API + individual pages) and the official
+3.14/3.15 "What's New"; grammar claims re-checked live on CPython 3.13 (no relevant grammar changed
+in 3.14/3.15).
+
+**Shipped:**
+
+- **PEP 750 — template strings** (Final, 3.14): `t"..."` evaluates interpolations **eagerly**
+  ("evaluated immediately … not deferred or wrapped in lambdas"; delayed evaluation is an
+  explicitly Rejected Idea), but each `Interpolation` carries `expression: str`, "the original text
+  of the interpolation" — a limited, sanctioned quasi-quotation channel.
+  <https://peps.python.org/pep-0750/>
+- **PEP 649 / PEP 749 — deferred annotations** (Final, 3.14): module/class annotations become
+  lazy, but **function-local annotations are untouched**: "these annotations have no runtime
+  effect–they're discarded at compile-time" (PEP 649), echoing PEP 526: "Annotations for local
+  variables will not be evaluated: `def f(): x: NonexistentName  # No error`". This is the fact the
+  annotated-assignment marker variant of Proposal 5 relies on.
+  <https://peps.python.org/pep-0649/> <https://peps.python.org/pep-0526/>
+- **PEP 810 — explicit lazy imports** (Final, 3.15): `lazy import json`; `lazy` is a soft keyword
+  special to import statements only — not reusable by libraries. Irrelevant to region dispatch.
+  <https://peps.python.org/pep-0810/>
+- **PEP 798 — unpacking in comprehensions** (Final, 3.15): `[*L for L in lists]`. Mildly nice for
+  piece lists; nothing more. <https://peps.python.org/pep-0798/>
+- **PEP 646** (Final, 3.11): star-unpacking is legal inside subscripts — `concat[*regions]` works
+  (verified live). <https://peps.python.org/pep-0646/>
+
+**Pipeline:** nothing syntax-level is accepted for 3.16 yet. Drafts worth watching: **PEP 718
+subscriptable functions** (would make `concat[...](...)` a typed first-class shape), PEP 653
+(match-semantics refinement — still no range patterns), PEP 822 (dedented strings).
+
+**Rejected / dormant — the walls of the design space:**
+
+- **PEP 335 — overloadable boolean operators**: *Rejected* (Guido, 2012: "I really dislike that
+  the PEP adds to the bytecode for all uses of these operators even though almost no call sites
+  will ever need the feature"). Verified live: `__bool__` returning a non-`bool` raises
+  `TypeError: __bool__ should return bool` — `if`/`and`/`or` are un-interceptable forever.
+  <https://peps.python.org/pep-0335/>
+- **PEP 637 — keyword arguments in subscripts**: *Rejected*. `concat[K[0], default=x]` is a
+  SyntaxError (verified live). <https://peps.python.org/pep-0637/>
+- **PEP 638 — syntactic macros** (`name!` AST transforms): *Draft*, dormant since 2020.
+  <https://peps.python.org/pep-0638/>
+- **PEP 3150 (`given`) / PEP 403 (`@in`)** — block-as-expression: both *Deferred* ("primarily due
+  to the lack of compelling real world use cases"). <https://peps.python.org/pep-3150/>
+- **Pattern matching**: no range-pattern PEP exists. Verified live: `case K[0]:` is a
+  **SyntaxError**; value patterns must be dotted names; a bare `case K:` *captures*; and
+  `case range(0, 5):` parses as a class/isinstance pattern, not a range test.
+  <https://peps.python.org/pep-0634/>
+
+## 6. Precedents for the implementation tricks
+
+- **Decoration-time AST rewriting is production-proven.** pytest: "Reporting details about a
+  failing assertion is achieved by rewriting assert statements before they are run", via an import
+  hook writing new `.pyc` files (<https://docs.pytest.org/en/stable/how-to/assert.html>). MacroPy:
+  "transformations on the abstract syntax tree (AST) of a Python program at *import time*"
+  (<https://github.com/lihaoyi/macropy>). And gt4py.cartesian itself is `inspect.getsource` +
+  `ast.parse` (`src/gt4py/cartesian/utils/meta.py`, `frontend/gtscript_frontend.py`).
+- **Bytecode-level alternative.** Numba compiles from **bytecode**, not source: "Numba is a
+  compiler for Python bytecode…"; its first stage recovers control flow from the bytecode
+  (<https://numba.readthedocs.io/en/stable/developer/architecture.html>). Relevant when source is
+  unavailable (REPL, exec).
+- **Tracer-refuses-bool** (the model for `Domain.__bool__` raising): JAX
+  `TracerBoolConversionError` — "occurs when a traced value in JAX is used in a context where a
+  boolean value is expected", pointing users to `lax.cond` (<https://docs.jax.dev/en/latest/errors.html>);
+  `torch.fx` — symbolic tracing "does not currently support *dynamic control flow*", raising
+  "symbolically traced variables cannot be used as inputs to control flow"
+  (<https://docs.pytorch.org/docs/stable/fx.html>).
+- **Replay / multi-shot execution** (the model for Proposal 1's option d): thermometer
+  continuations — Koppel, Scherer, Solar-Lezama, "Capturing the Future by Replaying the Past
+  (Functional Pearl)", PACMPL 2(ICFP) 2018: "replaying the entire computation from the start,
+  guiding it using a recording" (<https://doi.org/10.1145/3236771>). In Python, the concolic
+  verifier **CrossHair** "repeatedly calls the function you want to analyze", forcing branch
+  booleans and "remember[ing] what decisions it has made so that it can make different decisions
+  on future executions" (<https://crosshair.readthedocs.io/en/latest/how_does_it_work.html>). No
+  array DSL is known to use replay — they refuse `bool()` or rewrite instead.
+- **`class`-body capture** (the model for Proposal 9): PEP 3115 — "`__prepare__` returns a
+  dictionary-like object which is used to store the class member definitions during evaluation of
+  the class body" (<https://peps.python.org/pep-3115/>); the metaclass call may return any object,
+  which the `class` statement simply binds (datamodel: the result "is bound in the local
+  namespace"). Real DSL precedent: `enum`'s `EnumMeta.__prepare__` returns `_EnumDict` (ordered,
+  duplicate-tracking member capture); Django's declarative `Model` bodies via `ModelBase`.
+  Verified empirically: the namespace observes every binding in order (rebindings included), a
+  metaclass returning `42` binds the class name to `42`, and class bodies read enclosing function
+  locals — with the caveat that a name *assigned in* the body and read before assignment falls
+  back to globals, not the enclosing function.
+- **Model-capture `with` blocks** (why Proposal 3/7 need the rewrite): PyMC — "all PyMC objects
+  introduced in the indented code block below the `with` statement are added to the model behind
+  the scenes" (<https://www.pymc.io/projects/docs/en/stable/learn/core_notebooks/pymc_overview.html>)
+  — but registration happens at object *construction*; PEP 343 gives a `with` block only
+  `__enter__`/`__exit__`, so plain assignments to local names trigger no hook.
+- **Piece assembly as an array idiom** (Proposal 8): xarray `combine_by_coords` — "Attempt to
+  auto-magically combine the given datasets … into one by using dimension coordinates"
+  (<https://docs.xarray.dev/en/stable/generated/xarray.combine_by_coords.html>).
+
 ## Synthesis for the proposal
 
 1. The model to imitate is **domain-splicing**: YASK `IF_DOMAIN`, Devito `subdomain=`, GridTools
@@ -321,6 +415,11 @@ interior, `1 ¯1` = a corner) — the kernel is *told its boundary offset* and c
 4. Two ideas from the edges are worth remembering even if not adopted now: ExaSlang's
    *BC-in-the-type + `apply bc`* (declarative), and APL's *boundary-offset token threaded into the
    kernel* (orthogonal to selection).
+5. Python's own trajectory (§5) does not change the picture: 3.14/3.15 add nothing for region
+   dispatch (t-strings' source-text capture is the one new primitive, and it trades Python syntax
+   for strings), and the enabling PEPs are rejected (335, 637), dormant (638), or deferred
+   (3150/403). The durable implementation options are the tricks in §6 — AST rewriting, replay,
+   and `__prepare__` capture.
 
 ### Source-reliability notes
 
