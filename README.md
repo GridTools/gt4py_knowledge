@@ -10,6 +10,9 @@ early. This is neither the gt4py source tree nor the formal ADR record.
 See [`AGENTS.md`](AGENTS.md) for the structure, authoring workflow, and the rules
 for keeping [`content/index.md`](content/index.md) useful.
 
+Every proposal must include a `status` field in its frontmatter: `draft`
+(default), `reviewed`, or `final`.
+
 ## Structure
 
 ```
