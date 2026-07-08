@@ -36,6 +36,10 @@ Work-in-progress proposals, organized by contributor.
 - [[ideas/havogt/field-data-protocol|A FieldData protocol for gt4py.next embedded fields]] — keywords: fields, domain, data, protocol, embedded, function-fields, boundary-conditions, materialization, lazy, concat_where, origin, prior-art
 - [[ideas/havogt/boundary-condition-syntax|Frontend syntax sugar for boundary conditions over concat_where]] — keywords: frontend, foast, boundary-conditions, concat_where, regions, syntax-sugar, if-elif-else, match, embedded, cartesian-parity, dsl-design, prior-art, python-versions, peps, piece-algebra, metaclass, replay
 
+### edopao
+
+- [[ideas/edopao/dace_external_memory/external-memory-for-dace-arrays|External workspace memory for DaCe temporary arrays]] — keywords: dace, backend, gpu, memory, temporary-arrays, workspace, cuda, hip, mempool, persistent, external, allocation, icon4py, performance
+
 ### egparedes
 
 - [[ideas/egparedes/layered-architecture|A layered architecture for gt4py with enforced public/internal decoupling]] — keywords: architecture, layering, tach, modularity, public-api, semi-public, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, dsl, config, allocators, caching, fingerprint, compiled-program, factory-boy, instrumentation, jax, decoupling, migration, tech-debt
