@@ -254,8 +254,7 @@ goal; the primary goal is external allocation itself.
 
 ## Related work
 
-- DaCe external-memory test that motivates the approach: see DaCe external-memory
-  test that motivates the approach: [`external_memory_test.py`](external_memory_test.py)
+- DaCe external-memory test that motivates the approach: [`external_memory_test.py`](external_memory_test.py)
   in this directory.
 - gt4py layering and build-cache direction:
   [[personal/egparedes/layered-architecture|A layered architecture for gt4py with
