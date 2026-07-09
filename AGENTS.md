@@ -93,9 +93,11 @@ and agents consult. It must stay current and keyword-rich:
   appendices (`<slug>_research.md`, `<slug>_<topic>.md`) or implementation
   subdirs. Reference those from within the proposal document itself (with
   `[[wikilinks]]`), so the index stays a flat map of proposals.
-- When a proposal is **accepted**, move it from `personal/<person>/` to
-  `shared/` and move its index entry from **Personal** to **Shared**, keeping
-  the keywords. When a shared proposal is **retired**, delete the file and
+- Proposals that are actively being considered by the team should be moved from
+  `personal/<person>/` to `shared/`, and must only be changed with reviewed PRs.
+  At this point, a shared proposal cannot go back to the `draft` status. Also,
+  move its index entry from **Personal** to **Shared**, keeping the keywords.
+  When a shared proposal is implemented and merged to GT4Py, delete the file and
   its index entry.
 - Prefer one consistent keyword vocabulary across entries (e.g. reuse `dace`,
   `unstructured`, `type-system`) so related ideas cluster and conflicts surface.
