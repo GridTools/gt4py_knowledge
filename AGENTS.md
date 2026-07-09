@@ -16,27 +16,31 @@ here). No local build is needed to author; just edit Markdown.
 ```
 content/
   index.md              # landing page = the keyworded, hierarchical index (see below)
-  ideas/
-    <person>/           # one subdirectory per contributor
-      <proposal>.md           # a proposal/idea
-      <proposal>_research.md  # optional appendix: background, research, prior art
-      <proposal>_<topic>.md   # optional further appendices
-      <proposal>/             # optional subdir: implementations illustrating the design
-  accepted/             # proposals generally accepted but not yet implementation-ready
+  personal/
+    <person>/                   # one subdirectory per contributor
+      <proposal>.md             # a single-file proposal/idea
+      <proposal>/               # a multi-file proposal/idea (REQUIRED if >1 file)
+        <proposal>.md           # the main proposal/idea
+        <proposal>_research.md  # optional appendix: background, research, prior art
+        <proposal>_<topic>.md   # optional further appendices
+  shared/               # proposals accepted and implementation-ready (only touch with PR review)
   templates/            # idea template (NOT published — see ignorePatterns)
 ```
 
-- **`ideas/<person>/`** — your working area. Use your GitHub handle as the
+- **`personal/<person>/`** — your working area. Use your GitHub handle as the
   directory name. Filenames are free-form kebab-case slugs; no numbering.
-- **`accepted/`** — flat directory of proposals the group broadly agrees on but
-  that are not concrete enough to implement yet (may still have gaps). Entries
-  here can be **removed** if flaws are discovered later — that is expected.
+- **`shared/`** — flat directory of proposals the group broadly agrees, which
+  should be concrete enough to implement in gt4py; a proposal can be moved here
+  only with PR review.
 - An accepted idea that becomes concrete graduates to real work in gt4py (a PR,
   or a formal ADR in the gt4py repo); it can then be retired from here.
 
 ## Authoring a proposal
 
-1. Copy `content/templates/idea.md` to `content/ideas/<your-handle>/<slug>.md`.
+1. Copy `content/templates/idea.md` to `content/personal/<your-handle>/<slug>.md`.
+   If the proposal later grows beyond one file (appendices, implementation
+   sketches, etc.), move it into a dedicated `content/personal/<your-handle>/<slug>/`
+   directory and rename the main note to `<slug>/<slug>.md`.
 2. Fill the frontmatter:
    ```yaml
    ---
@@ -44,8 +48,16 @@ content/
    author: <your-handle>
    tags: [keyword1, keyword2]   # the topics this document discusses
    created: 2026-06-11
+   status: draft
    ---
    ```
+   The `status` field can be any of:
+   - `draft` — still taking shape; AI-generated content should stay here until a human
+      reviews it.
+   - `reviewed` — at least one person (e.g. the author) has reviewed the content.
+   - `final` — clear proposal that could be implemented, but should still be reviewed
+      by another person.
+
 3. Before writing, **skim the index and existing proposals** for overlap; link
    related/conflicting documents with `[[wikilinks]]` and call out the conflict
    explicitly. Surfacing conflicts is the whole point of this repo.
@@ -71,20 +83,22 @@ and agents consult. It must stay current and keyword-rich:
   entry in the same change.
 - Each entry is a wikilink plus a short **keywords** list naming the topics the
   document actually discusses — e.g.
-  `- [[ideas/havogt/field-origin|Field origin rework]] — keywords: fields, domain, origin, embedded`.
+  `- [[personal/havogt/field-origin|Field origin rework]] — keywords: fields, domain, origin, embedded`.
   Keywords are what let people scan for overlapping ideas, so make them specific
   and honest about the content.
 - Keep an entry's keywords **in sync with the document's `tags` frontmatter**
   (same vocabulary; Quartz also builds tag pages from `tags`).
-- Group idea entries under a `### <person>` subsection of **Ideas**. Index
+- Group entries under a `### <person>` subsection of **Personal**. Index
   **only the main proposal** document — do **not** add index entries for its
   appendices (`<slug>_research.md`, `<slug>_<topic>.md`) or implementation
   subdirs. Reference those from within the proposal document itself (with
   `[[wikilinks]]`), so the index stays a flat map of proposals.
-- When a proposal is **accepted**, move the file from `ideas/<person>/` to
-  `accepted/` and move its index entry from **Ideas** to **Accepted**, keeping
-  the keywords. When an accepted proposal is **retired**, delete the file and
-  its index entry.
+- Proposals that are actively being considered by the team should be moved from
+  `personal/<person>/` to `shared/`, and must only be changed with reviewed PRs.
+  At this point, a shared proposal cannot go back to the `draft` status. Also,
+  move its index entry from **Personal** to **Shared**, keeping the keywords.
+  After a proposal is implemented and merged to GT4Py, delete the file and its
+  index entry.
 - Prefer one consistent keyword vocabulary across entries (e.g. reuse `dace`,
   `unstructured`, `type-system`) so related ideas cluster and conflicts surface.
 
