@@ -4,7 +4,7 @@ description: "Use application-provided buffers for gt4py.next DaCe temporary arr
 author: edopao
 tags: [dace, backend, gpu, memory, temporary-arrays, workspace, cuda, hip, mempool, persistent, external, allocation, icon4py, performance]
 created: 2026-07-08
-status: reviewed
+status: final
 ---
 
 > **TL;DR** Add an external memory mode to the gt4py.next DaCe backend where
