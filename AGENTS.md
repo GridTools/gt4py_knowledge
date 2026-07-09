@@ -97,8 +97,8 @@ and agents consult. It must stay current and keyword-rich:
   `personal/<person>/` to `shared/`, and must only be changed with reviewed PRs.
   At this point, a shared proposal cannot go back to the `draft` status. Also,
   move its index entry from **Personal** to **Shared**, keeping the keywords.
-  When a shared proposal is implemented and merged to GT4Py, delete the file and
-  its index entry.
+  After a proposal is implemented and merged to GT4Py, delete the file and its
+  index entry.
 - Prefer one consistent keyword vocabulary across entries (e.g. reuse `dace`,
   `unstructured`, `type-system`) so related ideas cluster and conflicts surface.
 
