@@ -25,7 +25,7 @@ content/
         <proposal>.md           # the main proposal/idea
         <proposal>_research.md  # optional appendix: background, research, prior art
         <proposal>_<topic>.md   # optional further appendices
-  shared/               # proposals accepted and implementation-ready (only touch with PR review)
+  shared/               # proposals that are discussed by the team (only touch with PR review)
   templates/            # idea template (NOT published — see ignorePatterns)
 quartz.config.ts        # Quartz config (set baseUrl to the Pages URL)
 quartz.layout.ts        # Quartz layout
