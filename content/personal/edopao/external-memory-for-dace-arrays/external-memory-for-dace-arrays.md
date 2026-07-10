@@ -150,17 +150,28 @@ the allocator is called with the size returned by `csdfg.get_workspace_sizes()`
 to obtain the CPU and/or GPU workspace buffers, which are then validated and
 installed with `csdfg.set_workspace()` before `fast_call()`.
 
-### Optional: stream synchronization for multi-stream SDFGs
+### Optional 1: stream synchronization for multi-stream SDFGs
 
 This project deliberately keeps all SDFGs on a single execution stream; two
 SDFGs never run concurrently, so the same workspace buffer can safely be reused.
 
 However, **inside** one SDFG DaCe may schedule maps on multiple internal
-streams. As long as every internal stream is synchronized back to the default
-stream before the SDFG returns, this is safe with external memory. A small
-CUDA/HIP tasklet at SDFG exit records events on each internal stream and waits
-on them from the default stream:
+streams. As long as all internal streams synchronize with the default
+stream before the SDFG begins or before it returns, this is safe with external memory.
 
+A small CUDA/HIP tasklet at SDFG entry records an event on the default stream
+and makes all other streams wait on it:
+```cpp
+cudaEventRecord(sync_event, cudaStreamDefault);
+for (int i = 0; i < __state->context.num_streams; i++) {
+    if (__state->gpu_context->internal_streams[i] != cudaStreamDefault) {
+        cudaStreamWaitEvent(__state->gpu_context->internal_streams[i], sync_event, 0);
+    }
+}
+```
+
+Another tasklet at SDFG exit records events on each internal stream and waits
+on them from the default stream:
 ```cpp
 for (int i = 0; i < __state->context.num_streams; i++) {
     if (__state->gpu_context->internal_streams[i] != cudaStreamDefault) {
@@ -196,6 +207,9 @@ sdfg.append_exit_code(
 )
 ```
 
+Note that the above code is not production-ready.
+The `dace_external_events` array should live inside the DaCe program handle, but adding fields to the handle requires a new DaCe SDFG API.
+
 The HIP target uses the same structure with `hipEvent_t`, `hipEventCreate`,
 `hipEventRecord`, `hipEventDestroy`, and `hipStreamWaitEvent`.
 
@@ -207,6 +221,15 @@ CUDA/HIP translation unit, and `__state->context.num_streams` together with
 This enables the new multi-stream DaCe code generator
 (`gt4py/pull/2591`) without risking workspace corruption. It is a secondary
 goal; the primary goal is external allocation itself.
+
+### Optional 2: Configurable synchronization stream
+
+This proposal has assumed, so far, that the default stream should be used for
+synchronization because the current gt4py/dace integration uses the default
+stream as the external workspace's synchronization point. We could add a
+configuration option to the dace backend to select the stream to use for
+synchronization. This feature could be useful to overlap computation and
+asynchronous halo exchange.
 
 ## Alternatives considered
 
