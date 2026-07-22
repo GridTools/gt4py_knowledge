@@ -14,7 +14,7 @@ index current. (Keep entries and their keywords in sync with each document's `ta
 
 Proposals the group broadly agrees are implementation-ready.
 
-_None yet._
+- [[shared/external-memory-for-dace-arrays|External workspace memory for DaCe temporary arrays]] — keywords: dace, backend, gpu, memory, temporary-arrays, workspace, cuda, hip, mempool, persistent, external, allocation, icon4py, performance
 
 <!-- Entry format:
 - [[shared/<slug>|Title]] — keywords: keyword1, keyword2, keyword3
@@ -37,7 +37,7 @@ Work-in-progress proposals, organized by contributor.
 
 ### edopao
 
-- [[personal/edopao/external-memory-for-dace-arrays|External workspace memory for DaCe temporary arrays]] — keywords: dace, backend, gpu, memory, temporary-arrays, workspace, cuda, hip, mempool, persistent, external, allocation, icon4py, performance
+- [[personal/edopao/refactor-gtir-to-sdfg-lowering|Refactoring the GTIR-to-SDFG lowering visitor]] — keywords: dace, backend, gtir, sdfg, lowering, refactoring, visitor-pattern, translator-registry, readability, maintainability
 
 ### egparedes
 
