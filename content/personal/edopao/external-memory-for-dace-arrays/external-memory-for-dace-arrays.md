@@ -63,7 +63,8 @@ sdfg.add_transient(
     "t0", [M, N], dace.float64,
     lifetime=dace.AllocationLifetime.External,
 )
-```
+)
+...
 
 After compilation the caller queries the required workspace size, hands in a
 buffer, and runs:
