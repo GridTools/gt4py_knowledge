@@ -78,7 +78,7 @@ csdfg(a=a, e=e)
 ```
 
 The DaCe-generated code no longer allocates or frees `t0`; it indexes into the
-external workspace.
+external workspace. This implies that `wsp` must be kept alive as long as `csdfg` exists.
 
 ### High-level gt4py integration
 
