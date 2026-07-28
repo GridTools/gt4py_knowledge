@@ -42,6 +42,7 @@ Work-in-progress proposals, organized by contributor.
 ### egparedes
 
 - [[personal/egparedes/layered-architecture|A layered architecture for gt4py with enforced public/internal decoupling]] — keywords: architecture, layering, tach, modularity, public-api, semi-public, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, dsl, config, allocators, caching, fingerprint, compiled-program, process-pool, factory-boy, instrumentation, adr, jax, decoupling, migration, tech-debt
+- [[personal/egparedes/otf-toolchain-split|Dissolving gt4py.next.otf into a toolchain core and DSL-agnostic build infrastructure]] — keywords: otf, toolchain, workflow, pipeline, refactoring, architecture, layering, modularity, backend, bindings, build-system, caching, runners, compiled-program, factory-boy, naming, observability, stage-inspection, adr, tach, tech-debt
 - [[personal/egparedes/discretization-independent-fd-syntax|A discretization-independent surface syntax for finite-difference computations]] — keywords: finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, pace, pmap, fv3, ifs-fvm, arakawa-staggering, c-grid, d-grid, a-grid, dynamical-core, hevi, vertical-solve, elliptic-solve, mpdata, semi-implicit, miura, atlas, prior-art, dsl-design
 
 <!-- Entry format (index only the main proposal; link appendices/implementations

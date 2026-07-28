@@ -216,7 +216,7 @@ placed since rev. 1 (in bold):
 | --- | --- | --- | --- |
 | **public_api** | The supported import surface. Re-exports only; owns deprecations (module `__getattr__`). | core, infra, utils (to re-export) | `gt4py.next`, `gt4py.storage` facades; **`next/typing.py`** (the public typing-only namespace — already facade-shaped) |
 | **core** | The gt4py *domain*: field/dimension/domain model, the IRs (FOAST/PAST/ITIR) and passes, type systems, embedded execution, codegens (IR → source), and the runner/orchestration components that drive compile+run. | infrastructure, utils | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens` + runner orchestration, **`otf/{definitions,stages,arguments,options,compiled_program}`** (the DSL-aware side of otf, incl. `CompiledProgramsPool`), **`otf/compilation_tasks`** (main-side prep bridging the pool to the runners — new since rev. 2), **`named_collections`**, **`instrumentation/hooks.py`** (imports `decorator`/`compiled_program`), the per-IR fingerprint *deconstructors* (`iterator/ir.py`, `ffront/stages.py`); plus `gt4py.cartesian` as-is (tagged core, not public_api, until folded in) |
-| **infrastructure** | DSL-agnostic *services* that never import an IR: configuration, caching/hashing, the build system (cmake/ninja + importer), C++ bindings, the pipeline/step machinery, device/buffer/allocator management, instrumentation machinery. | utils | `next/otf/{compilation,binding}`, `next/otf/{workflow,toolchain,code_specs,cpp_utils}`, **`next/otf/runners.py`** (the serial/thread/process compilation runners — new since rev. 2; DSL-agnostic once the artifact Protocol leaves `stages`, appendix §4.1), **`next/fingerprinting.py`** (the engine — its only gt4py deps are eve/utils-level), `config`, allocators (`storage` + `next/custom_layout_allocators`, once made domain-agnostic), **`instrumentation/{hook_machinery,metrics,gpu_profiler}`** |
+| **infrastructure** | DSL-agnostic *services* that never import an IR: configuration, caching/hashing, the build system (cmake/ninja + importer), C++ bindings, the pipeline/step machinery, device/buffer/allocator management, instrumentation machinery. | utils | `next/otf/compilation`, `next/otf/binding` (**caveat**, rev. 3.1: `binding` is type-system-bound today — its `Parameter` model carries `ts.TypeSpec` and the renderers match `ts`/`common` types — and joins this layer only after the parameter-model surgery designed in [[personal/egparedes/otf-toolchain-split|the otf child proposal]]), `next/otf/{workflow,toolchain,code_specs,cpp_utils}`, **`next/otf/runners.py`** (the serial/thread/process compilation runners — new since rev. 2; DSL-agnostic once the artifact Protocol leaves `stages`, appendix §4.1), **`next/fingerprinting.py`** (the engine — its only gt4py deps are eve/utils-level), `config`, allocators (`storage` + `next/custom_layout_allocators`, once made domain-agnostic), **`instrumentation/{hook_machinery,metrics,gpu_profiler}`** |
 | **utils** | Domain-agnostic foundations with no gt4py knowledge: the semi-public `gt4py.utils` library and the `dsltools` tree toolkit (both from `eve`), plus `defs` (today's `_core`). | (nothing internal) | `gt4py.utils` (semi-public, standalone), `gt4py._internal.dsltools`, `gt4py._internal.defs` (today's `_core`: scalar/device types, `filecache`, **`file_utils`** (atomic writes — new since rev. 2), `locking`, `ndarray_utils`) |
 
 **The key structural insight is unchanged — and now empirically validated.**
@@ -596,8 +596,15 @@ tracks reality:
   e.g. a `TODO: raise ExceptionGroup once Python 3.10 is dropped`); nothing
   in this proposal depends on it, but the facade work is a natural moment to
   schedule the bump.
-- **Relation to in-flight `next` proposals — complementary, not conflicting**
-  (unchanged): [[personal/havogt/field-data-protocol|A FieldData protocol for embedded fields]]
+- **Relation to in-flight `next` proposals — complementary, not conflicting**:
+  [[personal/egparedes/otf-toolchain-split|Dissolving gt4py.next.otf]] (child
+  proposal: the concrete design for this proposal's step 2 and the `otf` share
+  of steps 6-7 — executes items 2 and 5 in full, item 4 as its phase 6, the
+  naming half of item 9, the `otf` cycle of item 10, and the `key_function`
+  half of item 1; the docs half of item 9, the other three cycles of
+  item 10, and items 3, 6, 7, 8 stay here — and refines the `otf/binding`
+  layer placement, see the caveat now in the layer table);
+  [[personal/havogt/field-data-protocol|A FieldData protocol for embedded fields]]
   (a layering split one level down, lands inside `_internal/next/embedded`);
   [[personal/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]]
   (a public-API redesign — the facade is where such a change is staged);
