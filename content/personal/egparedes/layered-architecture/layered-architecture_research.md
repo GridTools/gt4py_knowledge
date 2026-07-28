@@ -1,116 +1,127 @@
 ---
-title: "Layered architecture — current-state analysis & references (rev. 2)"
+title: "Layered architecture — current-state analysis & references (rev. 3)"
 author: egparedes
-tags: [architecture, layering, tach, infrastructure, over-engineering, otf, workflow, dependencies, dsl, semi-public, jax, caching, fingerprint, compiled-program, factory-boy, research]
+tags: [architecture, layering, tach, infrastructure, over-engineering, otf, workflow, dependencies, dsl, semi-public, jax, caching, fingerprint, compiled-program, factory-boy, process-pool, adr, research]
 created: 2026-06-15
-updated: 2026-07-02
+updated: 2026-07-28
 draft: false
 status: draft
 ---
 
 > Appendix to [[personal/egparedes/layered-architecture|A layered architecture for
 > gt4py with enforced public/internal decoupling]]. Background only — the
-> recommendation lives in the main proposal. **Revision 2**: findings re-verified
+> recommendation lives in the main proposal. **Revision 3**: findings re-verified
 > against the current `main` of
-> [GridTools/gt4py](https://github.com/GridTools/gt4py) as of **2026-07-02**
-> (post-1.1.11); paths are under `src/gt4py/`. Where revision 1 (2026-06-15) got
-> a fact wrong or the code has since changed, the correction is called out
-> explicitly with a **[rev-1 correction]** or **[changed since rev. 1]** marker.
+> [GridTools/gt4py](https://github.com/GridTools/gt4py) as of **2026-07-28**
+> (post-v1.1.12, `da2c6df41`); paths are under `src/gt4py/`. Where an earlier
+> revision got a fact wrong or the code has since changed, the correction is
+> called out explicitly with a **[rev-N correction]** or
+> **[changed since rev. N]** marker (rev. 1 = 2026-06-15, rev. 2 = 2026-07-02).
 
 ---
 
-## 1. What changed on `main` since the rev. 1 analysis
+## 1. What changed on `main` since the rev. 2 analysis
 
-The repo moved noticeably between mid-June and July 2026. The changes land
-squarely on rev. 1's items — partly implementing them, partly overtaking them:
+31 commits landed between 2026-07-02 and 2026-07-28, including release
+**v1.1.12** (2026-07-20). (The rev. 1 → rev. 2 delta — `tach` adoption, the
+fingerprinting engine, the `CachedStep` redesign, default-on persistent
+translation caching, the `decoration` step removal — is summarized in the main
+proposal's status table; its facts are folded into the sections below.) The
+new work again lands on this proposal's territory — almost all of it on the
+infrastructure side, and almost all of it moving in the proposed direction:
 
-- **`tach` is adopted and CI-enforced** — a `tach.toml` at the repo root
-  declares an *exact* import DAG over the five top-level packages
-  (`_core`, `eve`, `storage`, `cartesian`, `next`), and a pre-commit hook runs
-  `tach check` (`.pre-commit-config.yaml:101-105`; `tach>=0.23.0` in the `lint`
-  dependency group). The root `AGENTS.md` institutionalizes it: *new import
-  edges require an explicit `tach.toml` edit plus PR justification*. This is
-  rev. 1's step 1, in a flat-modules (not layered) form.
-  `forbid_circular_dependencies` is present but commented out, with a
-  `TODO(egparedes)` naming the `cartesian ↔ storage` cycle as the blocker.
-- **A canonical fingerprinting engine landed**: the new
-  `next/fingerprinting.py` (756 lines) provides deterministic content-based
-  hashing via a generic *deconstruction + catamorphism* design, with two
-  canonical instances — `strict_fingerprinter` (cross-process deterministic,
-  for persistent caches) and `lenient_fingerprinter` (single-process, for
-  in-memory caches). The old ad-hoc pair in `otf/stages.py`
-  (`compilation_hash` built on `hash()`, `fingerprint_compilable_program`
-  built on eve's `content_hash`) is **gone**. This is most of rev. 1's
-  simplification 1 (details and residual issues in §5).
-- **`CachedStep` was redesigned** around the engine: explicit
-  `input_fingerprinter` + `step_fingerprinter` halves, sanctioned
-  `CachedStep.in_memory(...)` / `CachedStep.persistent(...)` constructors, and
-  a `BUILD_CACHE_VERSION_ID` salt.
-- **Translation caching is now on by default**: the `run_gtfn_cached` /
-  `run_gtfn_gpu_cached` backend variants were deleted and the public
-  `gtfn_cpu`/`gtfn_gpu` aliases repointed at the plain runners, which now carry
-  a persistent (`FileCache`-backed) translation cache keyed by the strict
-  fingerprint (`gtfn.py`, `dace/workflow/factory.py`).
-- **The `decoration` pipeline step was removed**: `OTFCompileWorkflow` is now
-  three steps (`translation → bindings → compilation`, `otf/recipes.py:16-24`),
-  and the runtime argument conversion moved into per-backend
-  `CompilationArtifact.load()` implementations (structural
-  `CompilationArtifact` Protocol in `otf/stages.py:140-156`;
-  e.g. `GTFNCompilationArtifact.load()` wraps `convert_args`).
-- **Backends are excluded from program fingerprints** via dataclass field
-  metadata — `backend: ... = dataclasses.field(metadata=utils.gt4py_metadata(fingerprint=False))`
-  in `ffront/decorator.py` — replacing three bespoke `singledispatch`
-  fingerprint registrations. The `gt4py_metadata` helper lives in
-  `next/utils.py` (`GT4PY_CLASS_METADATA_NS`).
-- **eve slimmed slightly and gained engine support**: the pickle-based
-  fingerprint helpers (`NodeFingerprinter`, `skipping_fields_node_pickler`,
-  `custom_pickler*`) were **removed from `eve/concepts.py`/`eve/utils.py`** and
-  superseded by the `next/fingerprinting.py` toolkit; `eve/utils.py` gained
-  `get_fully_qualified_name`, `singledispatcher`, `merge_dispatchers` (used by
-  the engine) and `content_hash` had its pickle protocol pinned
-  (`_CONTENT_HASH_PICKLE_PROTOCOL = 5`) for cross-version reproducibility.
-  `datamodels/core.py` gained `DataModelABC` (virtual-subclass hook).
-- **Minor honest-typing cleanups**: `StepSequence` lost its inner `__Steps`
-  wrapper dataclass (now a plain `steps: tuple[Workflow, ...]`).
-- **New agent/architecture docs**: root `AGENTS.md`, `next/AGENTS.md` (module
-  map, embedded-vs-compiled modes, conventions), plus
-  `iterator/ARCHITECTURE.md` and `iterator/README.md` — note the latter two are
-  **stale**: `ARCHITECTURE.md` still describes `fencil_processors/`,
-  `closure(...)` and `backend_executor.py` (none exist), and `README.md` is an
-  empty heading.
+- **Async compilation was extracted into a pluggable runner layer with a
+  process-pool default** (#2679, **ADR 0024 "Compilation Runners"**):
+  - New `otf/runners.py` (299 lines): a `CompilationTask` dataclass and a
+    `Runner` protocol (`submit(task) -> Future[CompilationArtifact]` +
+    `shutdown()`) with three implementations — `SerialRunner`, `ThreadRunner`,
+    `ProcessRunner` — selected via the new `GT4PY_BUILD_JOBS_MODE` env var
+    (`serial | thread | process`, default **`process`**), sized by
+    `GT4PY_BUILD_JOBS` (now affinity-mask-aware via `process_cpu_count`).
+    Runners produce *artifacts*, never loaded programs — `load()` runs in the
+    calling process.
+  - New `otf/compilation_tasks.py` (180 lines): main-side task preparation —
+    frontend lowering stays main-side (the raw user function cannot cross a
+    process boundary); connectivity tables travel as memory-mapped file
+    references (dumped lazily, once per run, shared by workers through the
+    page cache); a per-submit snapshot of `next.config` is applied in each
+    worker.
+  - `CompiledProgramsPool`'s module-global `ThreadPoolExecutor` is **gone**;
+    the pool now submits through `runners.get_default_runner()`. Workers are
+    `spawn`ed; everything crosses via stdlib pickle, so backend executors and
+    artifacts must be **picklable** (backends that don't qualify, or that
+    customize `Backend.compile`, fall back to the calling thread with a
+    warning).
+  - Motivation/effect: threads serialized all interpreter-bound work (GTIR
+    transforms, SDFG/C++ lowering, dace auto-optimize); measured on ICON
+    (dace GPU, cold cache), startup-to-first-timestep went **~28.5 min →
+    ~10.4 min**.
+  - Knock-ons: `fingerprinting.py` deconstructors gained an explicit pickle
+    identity (`make_deconstructor(..., name=, module=)`, +79 lines); eve's
+    `singledispatcher` type now permits overwriting `__name__`/`__qualname__`;
+    `wait_for_compilation()` now also tears down the default runner (with an
+    in-tree `TODO(havogt)` reconsidering the teardown).
+- **OTF build caches are crash-consistent** (#2691, **ADR 0025**): every cache
+  write is an **atomic publish** (temp sibling + `os.replace`; new
+  `_core/file_utils.py` with `atomic_write_bytes`) and every read
+  **validates + self-heals** (any load failure → treat as miss → rebuild).
+  Covers the `FileCache` translation cache, gtfn `gt4py.json` build data, dace
+  build folders, and the shared compiledb template. Follow-up #2714 aligned
+  the dace determinism check with gt4py's cache-folder naming.
+- **The ADR record caught up with the infrastructure work**:
+  `docs/development/ADRs/next/` now holds **0023-Fingerprinting**
+  (**[rev-2 correction]** — created 2026-06-19, so it already existed at the
+  rev. 2 baseline but went unnoticed), **0024-Compilation-Runners**, and
+  **0025-Crash_Consistent_Build_Caches**. The "engine-down" services are being
+  documented as they land.
+- **Tracer support, part 1: `tree_map` (#2586)** — new ITIR builtins
+  `tree_map_tuple` / `map_tuple`, a new `ExpandTupleMaps` pass running early in
+  both transform pipelines, and a `map_` → `map_list` rename. Core-side IR
+  evolution (first step toward tracer/vector-operation support); no layering
+  impact.
+- Smaller: StaticArgs-injection fix (#2659); `recursive` option for
+  `CollapseTuple` (#2689); recursion limit propagated to compilation workers
+  (#2698); a `.claude/skills` version-bump agent skill (#2697); the `dace` pin
+  bumped `>=2.0.0a4` → `>=2.0.0a5` (still pre-release, still required).
 
-Not moved: no `_internal`, no facades, no eve dissolution, config still
-duplicated, factory-boy still the backend-builder mechanism, `Backend` not
-renamed, no stage-dump or cache-diagnostics facility. Python floor is still
-3.10 (`requires-python = '>=3.10, <3.15, ...'`) — the anticipated <3.12 drop
-has not happened yet.
+Not moved (re-verified 2026-07-28): no `_internal`, no facades, no module
+`__getattr__` anywhere, no eve dissolution, config still duplicated,
+factory-boy still the backend-builder mechanism, `Backend` not renamed, no
+stage-dump or cache-miss-diagnostics facility, `tach.toml` **byte-identical**
+since rev. 2 (flat DAG; `forbid_circular_dependencies` still commented out),
+`iterator/ARCHITECTURE.md` still stale and `iterator/README.md` still empty.
+Python floor still 3.10 (`requires-python = '>=3.10, <3.15, !=3.13.10,
+!=3.14.1'`) — the anticipated <3.12 drop has not happened yet.
 
-## 2. Current package map (2026-07-02)
+## 2. Current package map (2026-07-28)
 
 ```
 gt4py/
   __init__.py        # exports only: eve, storage (unchanged; no __getattr__/deprecations)
-  _core/             # definitions (DType/Device/Scalar), filecache, locking, ndarray_utils, types
+  _core/             # definitions (DType/Device/Scalar), filecache, file_utils (NEW: atomic
+                     #   writes), locking, ndarray_utils, types
   eve/               # datamodels / NodeVisitor / codegen / traits framework + general utils
   storage/           # TensorBuffer + allocators core; storage/cartesian layout registry
   cartesian/         # legacy GTScript stack (config, caching, frontend/, gtc/, backend/)
   next/              # modern field-operator stack
     common.py  config.py  backend.py  constructors.py  field_utils.py  utils.py
     custom_layout_allocators.py
-    fingerprinting.py        # NEW: content-hash engine (strict/lenient fingerprinters)
-    named_collections.py     # NEW-ish: eval-codegen extract/construct for tuple/dataclass args
-    typing.py                # NEW-ish: public typing-only namespace (gtx.typing)
+    fingerprinting.py        # content-hash engine (strict/lenient; now with pickle identity)
+    named_collections.py     # eval-codegen extract/construct for tuple/dataclass args
+    typing.py                # public typing-only namespace (gtx.typing)
     type_system/             # type_specifications, type_info, type_translation, mypy_plugin
     ffront/                  # decorator, func_to_foast/past, *_ast, *_passes/, foast_to_gtir, past_to_itir, stages
     iterator/                # ir.py, builtins, embedded, transforms/ (~40 passes), type_system/
     otf/                     # workflow, toolchain, definitions, stages, recipes, arguments,
                              #   code_specs, options, compiled_program, cpp_utils,
+                             #   runners (NEW: serial/thread/process compilation runners),
+                             #   compilation_tasks (NEW: main-side task prep for runners),
                              #   binding/ (cpp_interface, nanobind), compilation/ (cmake, cache, importer)
     program_processors/      # codegens/gtfn, runners/{gtfn,roundtrip,dace}, formatters
     embedded/                # nd_array_field, operators, context
     instrumentation/         # hook_machinery, hooks, metrics, gpu_profiler
     errors/  experimental/
-tach.toml                    # NEW: exact flat import DAG over the five packages, CI-enforced
+tach.toml                    # exact flat import DAG over the five packages, CI-enforced
 ```
 
 Proposed layer assignment (see main proposal): unchanged in shape from rev. 1,
@@ -118,6 +129,9 @@ extended to place the modules that are new or newly understood —
 `fingerprinting` → *infrastructure* (engine; per-IR deconstructors stay in
 core); `otf/compiled_program` + `otf/arguments` + `otf/options` → *core*
 (runner orchestration / type-system-aware argument model);
+**`otf/runners` → *infrastructure*** (DSL-agnostic in substance — see §4.1)
+and **`otf/compilation_tasks` → *core*** (the DSL-aware bridge between the
+pool and the runners); `_core/file_utils` → *utils* (`defs`);
 `instrumentation/hook_machinery` + `metrics` → *infrastructure* but
 `instrumentation/hooks.py` → *core* (it imports `ffront.decorator` and
 `otf.compiled_program`); `named_collections` → *core* (type-system-aware);
@@ -171,10 +185,11 @@ the one blocker for `forbid_circular_dependencies = true`.
 
 ### 3.4 Backends: still hard-wired, no registry
 
-`next/__init__.py:97-98` wires `gtfn_cpu`/`gtfn_gpu` (now the non-`_cached`
+`next/__init__.py:97-98` wires `gtfn_cpu`/`gtfn_gpu` (the non-`_cached`
 runners — **[changed since rev. 1]**) and `itir_python`; dace backends are
-module-level singletons in `runners/dace/workflow/backend.py`, picked up
-lazily in `decorator.py:419-424` via `try: import ... except ImportError`.
+module-level singletons in `runners/dace/workflow/backend.py`, and the dace
+`Program` specialization is swapped in lazily in `decorator.py:422-428` via
+`try: import ... except ImportError`.
 `DEFAULT_BACKEND: Backend | None = None` (`decorator.py:54`) selects embedded
 execution by default. No central registry; adding a backend still means
 editing `__init__`.
@@ -210,16 +225,31 @@ Grep of IR/frontend imports across `otf/`:
 
 | IR/DSL-**aware** (imports `iterator.ir` or `ffront`) | IR-**agnostic** |
 | --- | --- |
-| `definitions.py` (ffront stages + itir), `stages.py` (itir), `compiled_program.py` (ffront), `recipes.py` (transitively, via `definitions`) | `workflow.py`, `toolchain.py`, `code_specs.py`, `options.py`, `cpp_utils.py`, `arguments.py` (type-system-aware only), all of `binding/`, all of `compilation/` |
+| `definitions.py` (ffront stages + itir), `stages.py` (itir), `compiled_program.py` (ffront), **`compilation_tasks.py`** (backend + common + constructors; **[new since rev. 2]**), `recipes.py` (transitively, via `definitions`) | `workflow.py`, `toolchain.py`, `code_specs.py`, `options.py`, `cpp_utils.py`, `arguments.py` (type-system-aware only), **`runners.py`** (**[new since rev. 2]**, see caveat), all of `binding/`, all of `compilation/` |
 
-The core/infrastructure cut proposed in the main document now runs along an
+**Caveat on `runners.py`**: it is DSL-agnostic in substance — the only thing
+it touches from the DSL side is the `stages.CompilationArtifact` type (used
+purely in annotations) — but `stages.py` itself imports itir, so the import
+edge is formally IR-tainted. Moving the structural `CompilationArtifact` /
+`ExecutableProgram` Protocols out of the IR-aware `stages.py` is the same
+small surgery already needed for the `otf.stages ⇄ otf.definitions` cycle,
+after which `runners.py` is cleanly infrastructure. (For reference: the
+three-step pipeline itself is `otf/recipes.py` — `translation → bindings →
+compilation` — with the artifact Protocol at `stages.py:141`.)
+
+The core/infrastructure cut proposed in the main document runs along an
 existing, verifiable line — extracting the right column into an `infra` layer
 requires no disentangling, only relocation (plus the `otf.stages ⇄
-otf.definitions` cycle fix).
+otf.definitions` cycle fix, which now also frees `runners.py`).
 
 ### 4.2 Workflow combinators: 8 classes, one now provably dead
 
-`otf/workflow.py` (360 lines) still defines `Workflow` (Protocol),
+*(Unchanged — `otf/workflow.py` has not been touched since 2026-06-19;
+re-verified 2026-07-28. Note the compilation **runners** of §4.7 are a new,
+separate mechanism: pipeline composition still goes through these
+combinators.)*
+
+`otf/workflow.py` (359 lines) still defines `Workflow` (Protocol),
 `ChainableWorkflowMixin`, `ReplaceEnabledWorkflowMixin`, `NamedStepSequence`,
 `MultiWorkflow`, `StepSequence`, `CachedStep`, `SkippableStep`.
 
@@ -261,50 +291,73 @@ ConcreteProgramDef[itir.Program, arguments.CompileTimeArgs]`; step contracts
 `TypeSpec`s with the **runtime** `offset_provider` —
 `# TODO(havogt): replace with common.OffsetProviderType once the temporary
 pass doesn't require the runtime information` (`:148`) — and still carries
-`column_axis`, which `compiled_program.py:627` suspects is dead
+`column_axis`, which `compiled_program.py:639` suspects is dead
 (`TODO ... seems to be unused, even for programs with scans`).
 
 ### 4.6 eval/exec-based codegen has **grown** — **[changed since rev. 1]**
 
-Inventory of `eval`/`exec` on generated source strings:
+Inventory of `eval`/`exec` on generated source strings (11 sites; same shape
+as rev. 2, line numbers shifted by the runner refactor):
 
-- `otf/arguments.py`: `ArgStaticDescriptor.from_value` (`:62-66`),
-  `make_primitive_value_args_extractor` (`:279-280`).
-- `otf/compiled_program.py`: 6 sites — `_get_type_of_param_expr:223`,
-  `_make_argument_descriptors:244`, `_convert_to_argument_descriptor_context:290`,
-  `_argument_descriptor_cache_key_from_args:501` (the measured hot path),
-  `_argument_descriptor_cache_key_from_descriptors:522`,
-  `_validate_argument_descriptor_mapping:554`.
-- `next/named_collections.py`: extractor/constructor factories
-  (`make_named_collection_extractor:126`, `make_named_collection_constructor:255`, …).
+- `otf/arguments.py`: `ArgStaticDescriptor.from_value` (`:66`),
+  `make_primitive_value_args_extractor` (`:280`).
+- `otf/compiled_program.py`: 6 sites — `_get_type_of_param_expr:237`,
+  `_make_argument_descriptors:258`, `_convert_to_argument_descriptor_context:304`,
+  `_argument_descriptor_cache_key_from_args:513` (the measured hot path),
+  `_argument_descriptor_cache_key_from_descriptors:534`,
+  `_validate_argument_descriptor_mapping:566`.
+- `next/named_collections.py`: 3 sites — extractor/constructor factories
+  (`:139`, `:150`, `:276`).
 
 Rev. 1 proposed restricting this technique to the one measured hot path; the
-codebase went the other way. Whether each site is hot enough to justify the
+codebase went the other way (and has since held steady — no new sites between
+rev. 2 and rev. 3). Whether each site is hot enough to justify the
 debuggability cost is an open question for the main proposal, not a settled
 defect.
 
-### 4.7 `compiled_program.py`: a new orchestration subsystem (not in rev. 1)
+### 4.7 `compiled_program.py`: the pool, now split from its execution machinery — **[changed since rev. 2]**
 
-`CompiledProgramsPool` (`compiled_program.py:318-681`) manages per-program
+`CompiledProgramsPool` (`compiled_program.py:333-706`) manages per-program
 compiled variants keyed by
 `CompiledProgramsKey = (*hashable_arg_descriptors, id(offset_provider),
 specialization)`: JIT vs AOT (`enable_jit`, `otf/options.py`
 `CompilationOptions`), static-argument specialization via
-`ArgStaticDescriptor`s, **async compilation** through a `ThreadPoolExecutor`
-(with public `wait_for_compilation` re-exported from `next/__init__`), and
-instrumentation via `hook_machinery` event/context hooks. It sits *above*
-`Backend.compile()` (`backend.py:154-160`), which is itself new-ish: a
-sanctioned AOT entry `Backend.compile(program, compile_time_args) →
-ExecutableProgram`. Architecturally this is the "runner orchestration"
-component of the core layer — and it is the natural consumer of a future
-sanctioned stage API.
+`ArgStaticDescriptor`s, async compilation (with public `wait_for_compilation`
+re-exported from `next/__init__`), and instrumentation via `hook_machinery`
+event/context hooks. It sits *above* `Backend.compile()` (`backend.py:154`),
+the sanctioned AOT entry `Backend.compile(program, compile_time_args) →
+ExecutableProgram`.
+
+**What changed (#2679, ADR 0024)**: the pool no longer owns the execution
+machinery. Its module-global `ThreadPoolExecutor` was replaced by two new
+modules with a clean division of labor:
+
+- `otf/compilation_tasks.py` (**core-side**): `make_compilation_task(backend,
+  definition_stage, compile_time_args)` decides what runs main-side (frontend
+  lowering — the raw user function can't cross a process boundary), whether
+  the task can be offloaded at all, and what crosses the boundary
+  (connectivity tables as memory-mapped file references).
+- `otf/runners.py` (**infra-side in substance**, §4.1): `Runner.submit(task)
+  → Future[CompilationArtifact]`, with serial/thread/process implementations
+  and a **process-pool default** (`spawn` + stdlib pickle). Runners never
+  `load()` — the artifact is loaded in the calling process, on first use.
+
+Architecturally this is the "runner orchestration in core, execution service
+below" split the main proposal assigns to the core/infrastructure boundary —
+gt4py implemented the mechanism-half of it in-place, one month after the
+fingerprinting engine did the same for hashing. The pool remains the natural
+consumer of a future sanctioned stage API. One new bespoke keying: the
+metrics-source cache is now a `contextvars.ContextVar` dict keyed by
+`(id(pool), key)` with a `weakref.finalize` guard (`compiled_program.py:57-77`).
 
 ### 4.8 Stage inspection: still none; the dace reach-in persists
 
+*(Re-verified 2026-07-28 — unchanged through the runner refactor.)*
+
 No `on_stage` observer, no `GT4PY_DUMP_STAGES`, no stage-dump switch exists
 anywhere in `next/` (the only dump facility is metrics:
-`GT4PY_DUMP_METRICS_AT_EXIT`). The single duck-typed reach-in survives at
-`runners/dace/program.py:79-95`:
+`GT4PY_DUMP_METRICS_AT_EXIT`). The single duck-typed reach-in survives
+verbatim at `runners/dace/program.py:79-95`:
 
 ```python
 otf_workflow = self.backend.executor
@@ -351,6 +404,21 @@ core*: `iterator/ir.py:26-30` builds `lenient_ir_fingerprinter` with
 infrastructure, descriptors from core" contract rev. 1 asked for** — already
 implemented, just not yet *located* in an infrastructure package.
 
+Two additions since rev. 2:
+
+- **The design is now an ADR** — `docs/development/ADRs/next/0023-Fingerprinting.md`
+  (**[rev-2 correction]**: created 2026-06-19, i.e. it already existed at the
+  rev. 2 baseline). It records the strict/lenient durability contract, the
+  deconstructor mechanism, and the `fingerprint=False` field-metadata
+  exclusion (used e.g. to keep `backend` out of program fingerprints) as the
+  official caching-key policy.
+- **Deconstructors gained a pickle identity** (**[changed since rev. 2]**,
+  #2679): `make_deconstructor(...)` / `make_strict_deconstructor(...)` accept
+  `name=`/`module=` so a dispatcher can be pickled *by reference* — required
+  for shipping backend executors (which carry fingerprinters) to process-pool
+  workers. The picklability requirement of ADR 0024 and the importable-by-name
+  requirement of `strict_fingerprinter` are the same discipline, applied twice.
+
 ### 5.2 Cache layers and keys (one engine, several keys — by design, mostly)
 
 | Cache | Key derivation | Tier |
@@ -365,32 +433,50 @@ implemented, just not yet *located* in an infrastructure package.
 
 The by-`id()` offset-provider hashing survives **only in the in-memory tier**
 and is now *documented as deliberate* (cheap identity comparison; binding
-order baked into generated bindings — docstring at `otf/stages.py:44-51`).
+order baked into generated bindings — docstring at `otf/stages.py:41-47`).
 Warm starts genuinely skip translation now: persistent translation cache +
 strict-fingerprint build folders.
 
-### 5.3 Residual issues found in this pass
+**[changed since rev. 2]** The persistent tier is now also
+**crash-consistent** (#2691, ADR 0025): all persistent layers (the `FileCache`
+translation cache, gtfn `gt4py.json` build data, dace build folders, the
+shared compiledb template) write via atomic publish
+(`_core/file_utils.py:atomic_write_bytes` — temp sibling + `os.replace`) and
+treat any load failure as a miss, rebuilding instead of aborting on truncated
+payloads left by Ctrl-C/OOM/full-disk. ADR 0025 frames it explicitly: ADR 0023
+made the *keys* correct; this makes the *payloads* trustworthy.
+
+### 5.3 Residual issues (re-verified 2026-07-28 — all still open)
 
 1. **`CachedStep.persistent()` wires the *lenient* step fingerprinter**
    (`workflow.py:322`) while the class docstring (`workflow.py:243-248`)
    states persistent caches "require `strict_fingerprinter` … so the on-disk
-   keys stay reproducible across processes". The *input* half is strict; the
-   *step* half is not. Either the docstring or the code is wrong — worth an
-   upstream issue either way.
+   keys stay reproducible across processes". The `persistent()` constructor's
+   own docstring honestly says "with the lenient fingerprinter", so the
+   contradiction is now *within one class*. The *input* half is strict; the
+   *step* half is not. Either the class docstring (and ADR 0023's framing) or
+   the code is wrong — worth an upstream issue either way.
 2. **Vestigial `key_function`**: `GTFNBackendFactory.Params.key_function =
    stages.fast_compilable_program_fingerprinter` (`gtfn.py:193`) is declared
    but wired to nothing.
-3. `compiled_program.py` keeps a metrics-source cache keyed by `id(pool)` with
-   a `weakref.finalize` guard (`:61-77`) — correct but another bespoke keying.
+3. `compiled_program.py` keeps a metrics-source cache keyed by `id(pool)` —
+   now a `contextvars.ContextVar` dict with a `weakref.finalize` guard
+   (`:57-77`) — correct but another bespoke keying.
 4. **No cache diagnostics anywhere**: `CachedStep.__call__` computes silently
    on `KeyError`; a JIT-disabled pool miss raises a bare `RuntimeError`. The
-   "why did this recompile?" question still has no one-line answer.
+   "why did this recompile?" question still has no one-line answer — and the
+   new self-healing reads (§5.2) *widen* the gap: a corrupted entry is now
+   silently rebuilt, which is the right behavior but one more invisible
+   recompilation cause.
 5. Cartesian caching is untouched by all of the above.
 
 ## 6. Backend construction: factory-boy, still — with new evidence
 
-- 7 `factory.Factory` subclasses: `GTFNCompilerFactory`,
-  `GTFNCompileWorkflowFactory`, `GTFNBackendFactory` (gtfn.py),
+- **8** `factory.Factory` subclasses (**[rev-2 correction]** — rev. 2 counted
+  7, missing `GTFNTranslationStepFactory` in
+  `codegens/gtfn/gtfn_module.py:287`, present since 2024):
+  `GTFNCompilerFactory`, `GTFNCompileWorkflowFactory`, `GTFNBackendFactory`
+  (gtfn.py), `GTFNTranslationStepFactory` (gtfn_module.py),
   `DaCeBackendFactory`, `DaCeWorkflowFactory`, `DaCeTranslationStepFactory`,
   `DaCeCompilationStepFactory` (dace/workflow/). All of `Trait`, `SubFactory`,
   `LazyAttribute`, `LazyFunction`, `SelfAttribute` in active use.
@@ -398,7 +484,9 @@ strict-fingerprint build folders.
   `GTFNBackendFactory(name_postfix="_imperative",
   otf_workflow__translation__use_imperative_backend=True)` (`gtfn.py:210`) and
   six `otf_workflow__bare_translation__*` overrides inside
-  `make_dace_backend` (`dace/workflow/backend.py:116-121`).
+  `make_dace_backend` (`dace/workflow/backend.py:112-121`) — the latter now
+  capped by an explicit
+  `# type: ignore[return-value] # factory-boy typing not precise enough`.
 - **`make_dace_backend(...)` is already a plain-function wrapper** producing
   the four dace backends — i.e. the `make_*_toolchain()` shape rev. 1
   proposed exists, but as a facade *over* the factory instead of a
@@ -411,11 +499,25 @@ strict-fingerprint build folders.
   directly instantiating `next_backend.Backend(...)` — plain code — but
   carries `# TODO(tehrengruber): introduce factory` (`roundtrip.py:283`). The
   team is pulling in both directions; needs an explicit decision.
-- `factory-boy>=3.3.3` and `dace>=2.0.0a4` are still **required** runtime
-  dependencies (dace is imported lazily/optionally at runtime,
-  `decorator.py:419-424`, yet is a hard install dep).
+- **New constraint since rev. 2**: ADR 0024's process-pool contract requires
+  backend executors to be **stdlib-picklable**, and explicitly blesses
+  "standard runners and factory-constructed variants" as qualifying. Any
+  replacement builder must preserve this — frozen dataclasses built by plain
+  functions do (they pickle by class + fields), so the constraint does not
+  weaken the plain-builder case; it only adds a test obligation.
+- `factory-boy>=3.3.3` and `dace>=2.0.0a5` (**[changed since rev. 2]**: was
+  `a4`) are still **required** runtime dependencies (dace is imported
+  lazily/optionally at runtime, `decorator.py:422-428`, yet is a hard install
+  dep).
 
 ## 7. Allocators & config — **[rev-1 correction]** smaller than described
+
+*(Unchanged between rev. 2 and rev. 3 — `custom_layout_allocators.py` and both
+config modules untouched, except `next/config.py` gaining the
+`GT4PY_BUILD_JOBS_MODE` setting and a new constraint: module-level config
+values are snapshotted and shipped to compilation workers, so they must stay
+picklable — one more reason config is an infrastructure *service*, not a pile
+of module globals.)*
 
 `next/custom_layout_allocators.py` (276 lines) has **2** Protocols
 (`FieldBufferAllocatorProtocol`, `FieldBufferAllocatorFactoryProtocol`) and
@@ -445,7 +547,7 @@ flags, `build_settings`/`cache_settings` dicts; `.gt_cache` vs
 
 Required runtime deps now: `numpy`, `attrs`, `array-api-compat`, `black`
 (codegen formatting), `boltons`, `cached-property`, `click`, `cmake`,
-`cytoolz`/`toolz`, **`dace>=2.0.0a4`** (one backend; lazily imported but
+`cytoolz`/`toolz`, **`dace>=2.0.0a5`** (one backend; lazily imported but
 required), `deepdiff`, `devtools`, **`factory-boy`** (builders only; mypy-broken,
 see §6), `filelock`, `frozendict`, `gridtools-cpp`, `jinja2` **and** `mako`
 (two template engines), `lark`, `nanobind` **and** `pybind11` (two binding
@@ -465,8 +567,11 @@ three-way spread).
 
 gt4py already runs `tach check` in pre-commit/CI over the flat five-package
 DAG (§3.1) — adoption is no longer a proposal, it is practice, including the
-social contract in `AGENTS.md` (edit `tach.toml` + justify in the PR). What
-the current file does **not** use yet:
+social contract in `AGENTS.md` (edit `tach.toml` + justify in the PR).
+`tach.toml` is **byte-identical between rev. 2 and rev. 3** — a month of
+substantial infra churn (runners, crash-consistent caches) required zero new
+inter-package edges, evidence the flat DAG is holding. What the current file
+does **not** use yet:
 
 - `forbid_circular_dependencies = true` (blocked by `cartesian ⇄ storage`);
 - module boundaries *inside* `gt4py.next` (the whole package is one tach
