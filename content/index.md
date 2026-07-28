@@ -55,11 +55,4 @@ Reference material that proposals can lean on — not proposals themselves.
 
 ### Software engineering
 
-Design and engineering practice distilled from landmark books. Start with the
-principles synthesis; follow its source tags into the per-book notes.
-
-- [[knowledge/software-engineering/principles|Working Principles]] — keywords: software-design, principles, complexity, modularity, dry, domain-modelling, architecture, code-review, checklist, knowledge-base
-- [[knowledge/software-engineering/philosophy-of-software-design|A Philosophy of Software Design (Ousterhout)]] — keywords: software-design, complexity, modularity, deep-modules, abstraction, information-hiding, interfaces, comments, naming, error-handling, code-review, book-notes
-- [[knowledge/software-engineering/pragmatic-programmer|The Pragmatic Programmer (Hunt & Thomas)]] — keywords: software-design, dry, orthogonality, reversibility, design-by-contract, assertions, testing, automation, refactoring, tracer-bullets, prototyping, tooling, book-notes
-- [[knowledge/software-engineering/domain-driven-design|Domain-Driven Design (Evans)]] — keywords: domain-modelling, ubiquitous-language, model-driven-design, entities, value-objects, aggregates, repositories, factories, bounded-context, strategic-design, core-domain, refactoring, supple-design, book-notes
-- [[knowledge/software-engineering/design-of-design|The Design of Design (Brooks)]] — keywords: design-process, conceptual-integrity, architecture, requirements, iteration, collaboration, constraints, exemplars, esthetics, design-tools, case-studies, book-notes
+- [[knowledge/software-engineering/principles|Working Principles]] — keywords: software-design, principles, complexity, modularity, dry, domain-modelling, architecture, code-review, checklist

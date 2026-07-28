@@ -35,10 +35,10 @@ content/
 - **`shared/`** — flat directory of proposals the group broadly agrees, which
   should be concrete enough to implement in gt4py; a proposal can be moved here
   only with PR review.
-- **`knowledge/<topic>/`** — background reference notes (e.g. distilled book
-  notes, external prior art) that proposals can cite. These are not proposals:
-  they use plain `title`/`description`/`tags` frontmatter with no `author` or
-  `status`, and they are indexed under **Knowledge** in `content/index.md`.
+- **`knowledge/<topic>/`** — background reference notes (distilled practice,
+  external prior art) that proposals can cite. These are not proposals: they use
+  plain `title`/`description`/`tags` frontmatter with no `author` or `status`,
+  and they are indexed under **Knowledge** in `content/index.md`.
 - An accepted idea that becomes concrete graduates to real work in gt4py (a PR,
   or a formal ADR in the gt4py repo); it can then be retired from here.
 
