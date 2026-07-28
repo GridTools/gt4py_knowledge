@@ -48,3 +48,11 @@ Work-in-progress proposals, organized by contributor.
      from within the proposal document itself, not here):
 - [[personal/havogt/<slug>|Title]] — keywords: keyword1, keyword2
 -->
+
+## Knowledge
+
+Reference material that proposals can lean on — not proposals themselves.
+
+### Software engineering
+
+- [[knowledge/software-engineering/principles|Working Principles]] — keywords: software-design, principles, complexity, modularity, dry, domain-modelling, architecture, code-review, checklist
