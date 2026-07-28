@@ -596,8 +596,12 @@ tracks reality:
   e.g. a `TODO: raise ExceptionGroup once Python 3.10 is dropped`); nothing
   in this proposal depends on it, but the facade work is a natural moment to
   schedule the bump.
-- **Relation to in-flight `next` proposals — complementary, not conflicting**
-  (unchanged): [[personal/havogt/field-data-protocol|A FieldData protocol for embedded fields]]
+- **Relation to in-flight `next` proposals — complementary, not conflicting**:
+  [[personal/egparedes/otf-toolchain-split|Dissolving gt4py.next.otf]] (child
+  proposal: the concrete design for this proposal's step 2 and the `otf` share
+  of steps 6-7 — executes items 2, 5, 9, 10, enables item 4, and refines the
+  `otf/binding` layer placement);
+  [[personal/havogt/field-data-protocol|A FieldData protocol for embedded fields]]
   (a layering split one level down, lands inside `_internal/next/embedded`);
   [[personal/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]]
   (a public-API redesign — the facade is where such a change is staged);
