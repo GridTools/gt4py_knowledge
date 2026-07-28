@@ -1,9 +1,9 @@
 ---
 title: A layered architecture for gt4py with enforced public/internal decoupling
 author: egparedes
-tags: [architecture, layering, tach, modularity, public-api, semi-public, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, dsl, config, allocators, caching, fingerprint, compiled-program, factory-boy, instrumentation, jax, decoupling, migration, tech-debt]
+tags: [architecture, layering, tach, modularity, public-api, semi-public, internal, packaging, dependencies, refactoring, infrastructure, over-engineering, otf, workflow, dsl, config, allocators, caching, fingerprint, compiled-program, process-pool, factory-boy, instrumentation, adr, jax, decoupling, migration, tech-debt]
 created: 2026-06-15
-updated: 2026-07-02
+updated: 2026-07-28
 status: draft
 ---
 
@@ -11,33 +11,39 @@ status: draft
 > core logic → infrastructure → utils** (top depends down, never up) — and move
 > implementation under a private `gt4py._internal` package while the public
 > package `gt4py.next` becomes a thin re-export facade (JAX's `_src/` pattern).
-> **Revision 2, re-baselined on `main` as of 2026-07-02.** Since revision 1,
-> gt4py has *already* adopted [tach](https://docs.gauge.sh/) in CI (as a flat
-> five-package import DAG) and *already* landed the canonical fingerprinting
-> engine, a redesigned two-tier caching contract, and default-on persistent
-> translation caching. The target architecture is unchanged; the plan is
-> re-based: evolve the existing `tach.toml` toward layers (cycle fixes →
-> intra-`next` modules → layers), finish the remaining `otf` debt items
-> (plain-code backend builders replacing factory-boy, honest combinator typing,
-> the argument-model split, a sanctioned stage-inspection/dump API, cache-miss
-> diagnostics, one config, the `Backend → Toolchain` naming), and then do the
-> `_internal` moves. Scope is unchanged: restructure `gt4py.next` plus shared
+> **Revision 3, re-baselined on `main` as of 2026-07-28 (post-v1.1.12).**
+> Since revision 2, gt4py again moved engine-down on its own: async
+> compilation was extracted from the compiled-programs pool into pluggable
+> **compilation runners** with a process-pool default (ADR 0024), and the
+> build caches were made **crash-consistent** via atomic writes and
+> self-healing reads (ADR 0025) — two more services implemented in exactly the
+> shape this proposal assigns to the infrastructure layer, now documented in
+> ADRs (0023–0025) as the proposal asks. Nothing else moved: `tach.toml` is
+> byte-identical (still a flat five-package DAG), and every simplification
+> item — plain-code backend builders replacing factory-boy, honest combinator
+> typing, the argument-model split, a sanctioned stage-inspection/dump API,
+> cache-miss diagnostics, one config, the `Backend → Toolchain` naming — is
+> still open. The target architecture and the plan are unchanged: evolve the
+> existing `tach.toml` toward layers (cycle fixes → intra-`next` modules →
+> layers), finish the remaining `otf` debt, then do the `_internal` moves.
+> Scope is unchanged: restructure `gt4py.next` plus shared
 > infrastructure/utils; **`eve` is dissolved** into a semi-public
 > general-purpose `gt4py.utils` library and an internal `dsltools` toolkit
 > (name retired); **`gt4py.cartesian` stays as-is** and is only repointed at
 > the shared infrastructure, foldable into the same layers later.
 
-> **Status**: draft proposal, **revision 2 (2026-07-02)** — supersedes the
-> 2026-06-15 draft. A structural/architectural direction, not a merged change.
+> **Status**: draft proposal, **revision 3 (2026-07-28)** — supersedes the
+> 2026-07-02 draft. A structural/architectural direction, not a merged change.
 > Drafted with AI assistance against the current `main` of
-> [GridTools/gt4py](https://github.com/GridTools/gt4py) (post-1.1.11).
+> [GridTools/gt4py](https://github.com/GridTools/gt4py) (post-v1.1.12,
+> `da2c6df41`).
 
 > **Appendix**:
-> [[personal/egparedes/layered-architecture/layered-architecture_research|Current-state analysis & references (rev. 2)]] —
-> what changed on `main` since revision 1, the verified dependency structure
-> (with corrections to rev. 1's claims), the `otf`/caching/factory-boy/allocator
-> catalogs with file paths, the updated dependency inventory, and the
-> tach/JAX references.
+> [[personal/egparedes/layered-architecture/layered-architecture_research|Current-state analysis & references (rev. 3)]] —
+> what changed on `main` since revision 2, the verified dependency structure
+> (with corrections to earlier revisions' claims), the
+> `otf`/caching/factory-boy/allocator catalogs with file paths, the updated
+> dependency inventory, and the tach/JAX references.
 
 ---
 
@@ -47,19 +53,54 @@ Revision 1 proposed nine simplification items and nine implementation steps.
 Roughly a third has since landed upstream — partly matching the proposal,
 partly overtaking it. Re-baselining honestly:
 
-| Rev. 1 item | Status on `main` (2026-07-02) |
+| Rev. 1 item | Status on `main` (2026-07-28) |
 | --- | --- |
 | Step 1: land `tach`, permissively | **Done, differently**: flat `exact = true` DAG over the five top-level packages, enforced in pre-commit/CI, socially institutionalized in `AGENTS.md`. No layers yet; `forbid_circular_dependencies` commented out (blocked by the `cartesian ⇄ storage` cycle). |
-| Simplification 1: one canonical fingerprint | **Largely done, and better**: new `next/fingerprinting.py` engine (strict/lenient fingerprinters, content-based, xxhash); old `compilation_hash` / `fingerprint_compilable_program` deleted; `CachedStep` redesigned (`in_memory`/`persistent`, step+input fingerprint halves, cache-version salt); persistent translation caching **on by default** (the `*_cached` backend variants were deleted); backends excluded from program fingerprints via field metadata. Residuals: a strict/lenient mismatch in `CachedStep.persistent`, a vestigial `key_function`, cartesian untouched (appendix §5.3). |
+| Simplification 1: one canonical fingerprint | **Largely done, and better**: new `next/fingerprinting.py` engine (strict/lenient fingerprinters, content-based, xxhash); old `compilation_hash` / `fingerprint_compilable_program` deleted; `CachedStep` redesigned (`in_memory`/`persistent`, step+input fingerprint halves, cache-version salt); persistent translation caching **on by default** (the `*_cached` backend variants were deleted); backends excluded from program fingerprints via field metadata; the design is recorded in **ADR 0023** and the persistent tier is now **crash-consistent** (ADR 0025). Residuals: a strict/lenient mismatch in `CachedStep.persistent`, a vestigial `key_function`, cartesian untouched (appendix §5.3). |
 | Simplification 2: stage-inspection / dump API | **Not done** — no observer, no `GT4PY_DUMP_STAGES`; the dace `program.py` duck-typed reach-in survives verbatim. `Backend.compile()` now exists as a sanctioned AOT entry, which helps. |
 | Simplification 3: `explain_cache_misses` | **Not done** — all cache layers miss silently. |
-| Simplification 4: plain-code builders, drop factory-boy | **Not done** — 7 `factory.Factory` classes, stringly `__`-path overrides; but `make_dace_backend()` already wraps the factory in the proposed plain-function shape, and pyproject now pins factory-boy as mypy-broken. Counter-current: `roundtrip.py` carries `TODO: introduce factory`. |
+| Simplification 4: plain-code builders, drop factory-boy | **Not done** — 8 `factory.Factory` classes (rev. 2 undercounted), stringly `__`-path overrides; but `make_dace_backend()` already wraps the factory in the proposed plain-function shape, and pyproject now pins factory-boy as mypy-broken. New since rev. 2: ADR 0024 requires executors to be *picklable* — plain frozen-dataclass builders satisfy this. Counter-current: `roundtrip.py` carries `TODO: introduce factory`. |
 | Simplification 5: honest combinator typing | **Marginal** — `StepSequence`'s inner `__Steps` wrapper removed; all 8 combinator classes remain; `SkippableStep` now has **zero users**; `NamedStepSequence` still derives step order by annotation reflection. |
 | Simplification 6: argument-model split | **Not done** — `CompileTimeArgs` still carries the runtime `offset_provider` (in-tree `TODO(havogt)`, blocked on the temporaries pass) and the suspected-dead `column_axis` (in-tree TODO). eval/exec codegen **grew** (`compiled_program.py`, `named_collections.py`). |
 | Simplification 7: one config | **Not done** — `next/config.py` and `cartesian/config.py` fully separate, divergent env-var namespaces. |
 | Simplification 8: allocator registry | **Partially moot** *(rev. 1 overcounted)*: the module has 2 Protocols + 6 `TypeIs` guards and a `device_allocators` registry **already exists**. The real remaining issue: `__gt_allocate__(domain: common.Domain, …)` keeps allocators core-bound. |
 | Simplification 9: naming pass (`Backend → Toolchain`) | **Not done**, but now *agreed in-tree*: `backend.py:143` carries `TODO(tehrengruber): Rename … Backend -> Toolchain`. |
-| (unforeseen) | **New subsystems** rev. 1 never placed: `otf/compiled_program.py` (`CompiledProgramsPool`: JIT/AOT variants, static-argument specialization, async compilation, instrumentation hooks), `otf/options.py`, `named_collections.py`, the public `gtx.typing` namespace, `instrumentation/hook_machinery`. The removal of the `decoration` step (pipeline is now `translation → bindings → compilation`, with per-backend `CompilationArtifact.load()`) moved the code *toward* the staged-API end state. |
+| (unforeseen) | **New subsystems** rev. 1 never placed: `otf/compiled_program.py` (`CompiledProgramsPool`: JIT/AOT variants, static-argument specialization, async compilation — since rev. 2 via pluggable process-pool **compilation runners** in `otf/runners.py` + `otf/compilation_tasks.py` — instrumentation hooks), `otf/options.py`, `named_collections.py`, the public `gtx.typing` namespace, `instrumentation/hook_machinery`. The removal of the `decoration` step (pipeline is now `translation → bindings → compilation`, with per-backend `CompilationArtifact.load()`) moved the code *toward* the staged-API end state. |
+
+### What changed since revision 2 (2026-07-02 → 2026-07-28)
+
+One month, 31 commits, release v1.1.12. Two structural changes — both
+upstream initiatives, both landing in this proposal's *infrastructure*
+territory (appendix §1 has the full delta):
+
+- **Compilation runners** (#2679, **ADR 0024**): async compilation moved out
+  of `CompiledProgramsPool` into a new `otf/runners.py` — a `Runner` protocol
+  (`submit(CompilationTask) → Future[CompilationArtifact]`) with
+  serial/thread/**process** implementations and a **process-pool default**
+  (`spawn` + stdlib pickle; `GT4PY_BUILD_JOBS_MODE`) — plus
+  `otf/compilation_tasks.py`, the main-side task preparation (frontend
+  lowering stays main-side; connectivity tables cross as memory-mapped file
+  references). Measured effect: ICON dace-GPU cold-start ~28.5 → ~10.4 min.
+  *For this proposal*: the core/infra cut through `otf` now exists
+  mechanically — `runners.py` is DSL-agnostic in substance,
+  `compilation_tasks.py` is the core-side bridge (appendix §4.1, §4.7). It
+  also adds a design constraint: executors and artifacts must be
+  **picklable**, which plain frozen-dataclass builders satisfy (item 4) and
+  which pushed the fingerprint deconstructors to carry pickle identities.
+- **Crash-consistent build caches** (#2691, **ADR 0025**): every persistent
+  cache write is an atomic publish (new `_core/file_utils.py`), every read
+  validates and self-heals (load failure → miss → rebuild). Another
+  engine-down infrastructure service, this one landing in `_core` (the future
+  `defs`). Self-healing also adds one more *silent* recompilation cause —
+  sharpening the case for item 3 (cache-miss diagnostics).
+
+Plus: the ADR record caught up — 0023-Fingerprinting (which already existed
+at rev. 2, unnoticed), 0024, 0025 — answering this proposal's "the landing
+sequence should include short ADRs" concern with demonstrated practice;
+tracer support part 1 (`tree_map` ITIR builtins, #2586) started on the core
+side; the `dace` pin moved to `>=2.0.0a5`. **Nothing else moved**: `tach.toml`
+is byte-identical, and no simplification item advanced (the full "not moved"
+list is in appendix §1).
 
 Two structural facts from rev. 1 also needed correction (appendix §3): the
 `backend ↔ ffront` relationship is a **strict one-way layering**
@@ -107,7 +148,9 @@ level. What it does not solve:
 
 - **The infrastructure over-engineering shrank but did not go away.** The
   caching/fingerprinting corner is genuinely fixed — one engine, an explicit
-  two-tier durability contract, warm starts that skip translation. Still
+  two-tier durability contract, crash-consistent on-disk state, warm starts
+  that skip translation — and the async-compilation corner now has a clean
+  runner abstraction rather than a pool-owned thread pool. Still
   standing: factory-boy as the backend-construction framework (now
   acknowledged in-tree as mypy-broken), eight workflow combinator classes for
   what are linear pipelines (one provably dead), Protocol/Generic adapter
@@ -118,13 +161,16 @@ level. What it does not solve:
   motivated, collectively a growing debuggability tax with no stated policy.
 
 The cost profile is unchanged: slow onboarding, fragile refactors, an unclear
-contract for downstream users — plus, new since rev. 1, a live example of what
-missing observability costs (the dace `__sdfg__` reach-in) and a live example
-of how much cleaner things get when a service is built engine-down
-(`fingerprinting`). **The moment is still right**: subsystem reworks are in
-flight (see related proposals below), the team already accepted
-machine-checked import contracts, and the fingerprinting work demonstrated the
-exact core/infrastructure split this proposal generalizes.
+contract for downstream users — plus a live example of what missing
+observability costs (the dace `__sdfg__` reach-in) and, by now, **three** live
+examples of how much cleaner things get when a service is built engine-down:
+`fingerprinting` (rev. 2), the compilation runners, and the crash-consistent
+cache primitives (both since rev. 2). **The moment is still right**: subsystem
+reworks are in flight (see related proposals below), the team already accepted
+machine-checked import contracts, ADRs 0023–0025 show the decision record
+working, and the fingerprinting and compilation-runner work demonstrated the
+exact core/infrastructure split this proposal generalizes — each time as a
+one-off, because there is still no layer to put such services in.
 
 ## Proposal
 
@@ -163,28 +209,30 @@ placements:
 ### The four layers
 
 Top-down; a layer may import from layers **below** it, never above. The table
-reflects the July 2026 tree, including the modules that are new or newly
+reflects the late-July 2026 tree, including the modules that are new or newly
 placed since rev. 1 (in bold):
 
 | Layer | Responsibility | May import | Contents (today's modules) |
 | --- | --- | --- | --- |
 | **public_api** | The supported import surface. Re-exports only; owns deprecations (module `__getattr__`). | core, infra, utils (to re-export) | `gt4py.next`, `gt4py.storage` facades; **`next/typing.py`** (the public typing-only namespace — already facade-shaped) |
-| **core** | The gt4py *domain*: field/dimension/domain model, the IRs (FOAST/PAST/ITIR) and passes, type systems, embedded execution, codegens (IR → source), and the runner/orchestration components that drive compile+run. | infrastructure, utils | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens` + runner orchestration, **`otf/{definitions,stages,arguments,options,compiled_program}`** (the DSL-aware side of otf, incl. `CompiledProgramsPool`), **`named_collections`**, **`instrumentation/hooks.py`** (imports `decorator`/`compiled_program`), the per-IR fingerprint *deconstructors* (`iterator/ir.py`, `ffront/stages.py`); plus `gt4py.cartesian` as-is (tagged core, not public_api, until folded in) |
-| **infrastructure** | DSL-agnostic *services* that never import an IR: configuration, caching/hashing, the build system (cmake/ninja + importer), C++ bindings, the pipeline/step machinery, device/buffer/allocator management, instrumentation machinery. | utils | `next/otf/{compilation,binding}`, `next/otf/{workflow,toolchain,code_specs,cpp_utils}`, **`next/fingerprinting.py`** (the engine — its only gt4py deps are eve/utils-level), `config`, allocators (`storage` + `next/custom_layout_allocators`, once made domain-agnostic), **`instrumentation/{hook_machinery,metrics,gpu_profiler}`** |
-| **utils** | Domain-agnostic foundations with no gt4py knowledge: the semi-public `gt4py.utils` library and the `dsltools` tree toolkit (both from `eve`), plus `defs` (today's `_core`). | (nothing internal) | `gt4py.utils` (semi-public, standalone), `gt4py._internal.dsltools`, `gt4py._internal.defs` (today's `_core`: scalar/device types, `filecache`, `locking`, `ndarray_utils`) |
+| **core** | The gt4py *domain*: field/dimension/domain model, the IRs (FOAST/PAST/ITIR) and passes, type systems, embedded execution, codegens (IR → source), and the runner/orchestration components that drive compile+run. | infrastructure, utils | `next/{common,ffront,iterator,type_system,embedded}`, `next/program_processors/codegens` + runner orchestration, **`otf/{definitions,stages,arguments,options,compiled_program}`** (the DSL-aware side of otf, incl. `CompiledProgramsPool`), **`otf/compilation_tasks`** (main-side prep bridging the pool to the runners — new since rev. 2), **`named_collections`**, **`instrumentation/hooks.py`** (imports `decorator`/`compiled_program`), the per-IR fingerprint *deconstructors* (`iterator/ir.py`, `ffront/stages.py`); plus `gt4py.cartesian` as-is (tagged core, not public_api, until folded in) |
+| **infrastructure** | DSL-agnostic *services* that never import an IR: configuration, caching/hashing, the build system (cmake/ninja + importer), C++ bindings, the pipeline/step machinery, device/buffer/allocator management, instrumentation machinery. | utils | `next/otf/{compilation,binding}`, `next/otf/{workflow,toolchain,code_specs,cpp_utils}`, **`next/otf/runners.py`** (the serial/thread/process compilation runners — new since rev. 2; DSL-agnostic once the artifact Protocol leaves `stages`, appendix §4.1), **`next/fingerprinting.py`** (the engine — its only gt4py deps are eve/utils-level), `config`, allocators (`storage` + `next/custom_layout_allocators`, once made domain-agnostic), **`instrumentation/{hook_machinery,metrics,gpu_profiler}`** |
+| **utils** | Domain-agnostic foundations with no gt4py knowledge: the semi-public `gt4py.utils` library and the `dsltools` tree toolkit (both from `eve`), plus `defs` (today's `_core`). | (nothing internal) | `gt4py.utils` (semi-public, standalone), `gt4py._internal.dsltools`, `gt4py._internal.defs` (today's `_core`: scalar/device types, `filecache`, **`file_utils`** (atomic writes — new since rev. 2), `locking`, `ndarray_utils`) |
 
 **The key structural insight is unchanged — and now empirically validated.**
 The core/infrastructure cut inside `otf` separates *IR → source text* (core)
 from *source text → loadable module* (infrastructure), with runners/toolchain
 composition in core so the generic pipeline machinery never imports an IR.
-Two things strengthened the case since rev. 1:
+Three things strengthened the case since rev. 1:
 
 - The cut line is now **verifiable and sharp** (appendix §4.1): `workflow`,
   `toolchain`, `code_specs`, `options`, `cpp_utils`, `binding/`,
   `compilation/` already import no IR; only `definitions`, `stages`,
-  `compiled_program` (and `recipes`, transitively) are DSL-aware. Extraction
-  is relocation, not disentangling — the one intra-`otf` cycle
-  (`stages ⇄ definitions`) is the only surgery required.
+  `compiled_program`, `compilation_tasks` (and `recipes`, transitively) are
+  DSL-aware. Extraction is relocation, not disentangling — the one intra-`otf`
+  cycle (`stages ⇄ definitions`) is the only surgery required, and fixing it
+  also frees the new `runners.py` (whose sole DSL contact is the
+  `CompilationArtifact` type it takes from `stages`).
 - **`fingerprinting` is the pattern, proven.** The engine is generic; domain
   knowledge enters only through per-type deconstructor overrides supplied at
   core call sites (`lenient_ir_fingerprinter` in `iterator/ir.py`,
@@ -193,12 +241,21 @@ Two things strengthened the case since rev. 1:
   contract rev. 1 specified for the cache — implemented before the layer
   exists to host it. The layering gives it (and future services) a home and a
   rule.
+- **The compilation runners repeated the pattern** (new since rev. 2, ADR
+  0024): a generic execution service (`runners.py` — task in, artifact-future
+  out, no IR knowledge in substance) fed by a core-side bridge
+  (`compilation_tasks.py` — decides what only the main process can do and
+  what may cross to a worker). Upstream drew this proposal's core/infra line
+  through the async-compilation machinery without naming it — the second
+  service in a month built engine-down, and the second with no layer to live
+  in.
 
-One placement is new: **`CompiledProgramsPool`** (`otf/compiled_program.py`)
-is the *runner orchestration* component — it sits above `Backend.compile()`,
-knows ffront stages and instrumentation, and manages JIT/AOT variant caches.
-It is unambiguously **core** (runners), and it is the natural consumer of the
-sanctioned stage API below.
+One placement is validated rather than new: **`CompiledProgramsPool`**
+(`otf/compiled_program.py`) is the *runner orchestration* component — it sits
+above `Backend.compile()`, knows ffront stages and instrumentation, and
+manages JIT/AOT variant caches; since rev. 2 it has already shed its execution
+machinery to the runners. It is unambiguously **core** (runners/orchestration),
+and it is the natural consumer of the sanctioned stage API below.
 
 ### Why four layers (not more, not fewer)
 
@@ -317,12 +374,13 @@ Renumbered by current priority; statuses per the table above and appendix
 §§4-7.
 
 1. **Finish the fingerprint/caching residuals** *(small; the big item is
-   done)*. Fix the `CachedStep.persistent` step-fingerprinter to honor its
-   documented strict contract (or fix the docstring — decide which is wrong);
-   delete the vestigial `GTFNBackendFactory.Params.key_function`; document the
-   two-tier (lenient-in-memory / strict-persistent) contract in one place as
-   *the* caching policy. Cartesian adoption of the engine is deferred with the
-   rest of cartesian.
+   done)*. Fix the `CachedStep.persistent` step-fingerprinter to honor the
+   strict contract documented in the class docstring and ADR 0023 (or fix the
+   docstrings — decide which is wrong); delete the vestigial
+   `GTFNBackendFactory.Params.key_function`. ~~Document the two-tier
+   (lenient-in-memory / strict-persistent) contract in one place~~ — **done
+   since rev. 2**: ADR 0023 is that place. Cartesian adoption of the engine is
+   deferred with the rest of cartesian.
 2. **A sanctioned stage-inspection / dump API** *(small, high value — now the
    top observability gap)*. Add an optional `on_stage(name, artifact)`
    observer to the pipeline and a `GT4PY_DUMP_STAGES=<dir>` switch writing
@@ -339,7 +397,10 @@ Renumbered by current priority; statuses per the table above and appendix
    compiled-programs pool) logs its key, hit/miss, and the first differing key
    component. The unified fingerprint made keys comparable; this makes them
    *inspectable*. Also turn the pool's JIT-disabled miss (`RuntimeError`) into
-   an error that says *which* static-args key was missing.
+   an error that says *which* static-args key was missing. New since rev. 2:
+   the crash-consistency self-heal (ADR 0025) rightly rebuilds corrupted
+   entries *silently* — one more recompilation cause only diagnostics can make
+   visible.
 4. **Plain-code backend builders, not factory-boy** *(medium, high value)*.
    Unchanged in substance: a backend/toolchain becomes a frozen dataclass built
    by a `make_*_toolchain(...)` function with ordinary keyword arguments; the
@@ -348,9 +409,14 @@ Renumbered by current priority; statuses per the table above and appendix
    makes this cheaper and more urgent: `make_dace_backend()` already has the
    right signature (it just delegates to the factory internally — invert it),
    pyproject pins factory-boy as mypy-broken, and `roundtrip.py` already
-   builds `Backend(...)` as plain code. **Conflict to resolve explicitly**:
-   `roundtrip.py:283` carries `TODO(tehrengruber): introduce factory` — the
-   team should decide the direction once, in an ADR, not per-module.
+   builds `Backend(...)` as plain code. One new requirement since rev. 2:
+   ADR 0024 makes executor **picklability** part of the backend contract
+   (process-pool workers receive the pickled executor), so replacement
+   builders must keep constructing plain, importable, frozen dataclasses —
+   which they do by design; add a pickle round-trip test per backend.
+   **Conflict to resolve explicitly**: `roundtrip.py:283` carries
+   `TODO(tehrengruber): introduce factory` — the team should decide the
+   direction once, in an ADR, not per-module.
 5. **Pipeline, not combinators — honest typing first** *(medium)*. Immediate:
    delete `SkippableStep` (zero users). Then: declare `NamedStepSequence` step
    order as an explicit class-level tuple instead of annotation reflection;
@@ -367,8 +433,9 @@ Renumbered by current priority; statuses per the table above and appendix
    explicitly-named runtime bridge for the temporaries pass (the in-tree
    `TODO(havogt)` is the blocker to clear); remove `column_axis` after
    confirming the in-tree suspicion that it is dead. New since rev. 1: the
-   eval/exec-generated-code technique spread to ~10 sites across
-   `compiled_program.py`, `arguments.py`, and `named_collections.py`. Keep the
+   eval/exec-generated-code technique spread to 11 sites across
+   `compiled_program.py`, `arguments.py`, and `named_collections.py` (stable
+   between rev. 2 and rev. 3 — no new sites). Keep the
    measured hot paths (the argument-descriptor cache key), but adopt a stated
    policy — a hot-path allowlist with a comment pointing at the measurement —
    so the technique stops spreading by default.
@@ -394,7 +461,10 @@ Renumbered by current priority; statuses per the table above and appendix
     ffront.fbuiltins`, `otf.stages ⇄ otf.definitions`, and `cartesian ⇄
     storage` (the `tach.toml` TODO). Each removal is independently landable
     and unlocks `forbid_circular_dependencies = true` and, later, the layer
-    declarations.
+    declarations. The `stages ⇄ definitions` fix should also relocate the
+    structural `CompilationArtifact`/`ExecutableProgram` Protocols out of the
+    IR-aware `stages.py` — that single move makes the new `otf/runners.py`
+    formally IR-free (appendix §4.1).
 
 None of these change behavior or performance; items 1-3 build the
 observability/diagnostics foundation that both the layering and any deeper
@@ -409,7 +479,12 @@ tracks reality:
 
 0. ~~**Land `tach`.**~~ **Done** (flat DAG, CI-enforced).
    ~~**One canonical fingerprint.**~~ **Done** (engine + two-tier contract +
-   default-on persistent translation caching).
+   default-on persistent translation caching; ADR 0023).
+   ~~**Crash-consistent persistent caches.**~~ **Done upstream since rev. 2**
+   (atomic publish + self-healing reads; ADR 0025).
+   ~~**An async-compilation execution service.**~~ **Done upstream since
+   rev. 2** (`otf/runners.py` + `otf/compilation_tasks.py`, process-pool
+   default; ADR 0024) — built in place; step 6f below only relocates it.
 1. **Cycle fixes + `forbid_circular_dependencies = true`.** Fix
    `cartesian ⇄ storage`, then the three intra-`next` cycles (item 10). Flip
    the flag in `tach.toml`. *(Small PRs, config + targeted refactors.)*
@@ -436,10 +511,14 @@ tracks reality:
    pipeline from `next/otf/workflow.py`+`toolchain.py` (where item 5's
    collapse completes); 6d allocators with the domain-agnostic signature
    (item 7); 6e instrumentation machinery (`hook_machinery`, `metrics`;
-   `hooks.py` stays core), hosting the `on_stage` observer from item 2.
+   `hooks.py` stays core), hosting the `on_stage` observer from item 2; 6f
+   the compilation runners from `next/otf/runners.py` — already infra-shaped
+   (ADR 0024); needs only the artifact-Protocol relocation from item 10
+   (`compilation_tasks` stays core).
 7. **Move `gt4py.next` core under `_internal.next`**, sub-package by
    sub-package (`common` → `type_system` → `iterator` → `ffront` → `embedded`
-   → `codegens` → runners incl. `compiled_program`), each behind a shim.
+   → `codegens` → runners incl. `compiled_program` + `compilation_tasks`),
+   each behind a shim.
 8. **Turn the public `__init__`s into real facades** (explicit re-exports +
    `__getattr__` deprecation shims). Public import names unchanged.
 9. **Tighten:** flip `tach` to layers + per-module `strict`; deprecate and
@@ -463,13 +542,14 @@ tracks reality:
   general-purpose utilities (`singledispatcher`) that clearly belong in a
   utils library rather than an "IR framework".
 - **A full staged-compilation-API redesign instead of in-place cleanups.**
-  Still the attractive larger commitment; still deferred. The gap has
-  narrowed from both sides since rev. 1: `decoration`'s removal made the
-  pipeline stage-shaped (`translation → bindings → compilation` +
-  `CompilationArtifact.load()`), and `Backend.compile()` +
-  `CompiledProgramsPool` sketch the runner half. Items 2 and 9 (stage API +
-  naming) are deliberately the largest strides toward it that don't require
-  the redesign.
+  Still the attractive larger commitment; still deferred. The gap keeps
+  narrowing from both sides: `decoration`'s removal made the pipeline
+  stage-shaped (`translation → bindings → compilation` +
+  `CompilationArtifact.load()`), `Backend.compile()` + `CompiledProgramsPool`
+  sketch the runner half, and since rev. 2 ADR 0024 factored *execution* out
+  of the pool (task preparation vs. running vs. loading are now separate,
+  named concepts). Items 2 and 9 (stage API + naming) are deliberately the
+  largest strides toward it that don't require the redesign.
 - **Wrap factory-boy better instead of removing it** (the `make_dace_backend`
   status quo). Rejected: it hides the stringly `__`-overrides at one call
   site while keeping the framework, the trait duplication, the mypy
@@ -486,27 +566,36 @@ tracks reality:
   or docstring — which is the intent? Worth an upstream issue independent of
   this proposal.
 - **Where does `CompiledProgramsPool` sit long-term?** This proposal places
-  it in core/runners. If the staged-compilation API is pursued, the pool is
-  its natural driver — decide whether the stage API (item 2) should be
-  designed against the pool's needs from the start.
+  it in core/runners — a placement ADR 0024 has since half-confirmed by
+  splitting the execution machinery out of the pool (the pool orchestrates;
+  `compilation_tasks` bridges; `runners` executes). If the staged-compilation
+  API is pursued, the pool is its natural driver — decide whether the stage
+  API (item 2) should be designed against the pool's needs from the start.
+- **Runner teardown semantics** (new since rev. 2): `wait_for_compilation()`
+  currently also tears down the default runner; the in-tree `TODO(havogt)`
+  asks whether a pure wait should keep workers warm between compilation
+  phases. Worth settling while the runner API is young.
 - **eval/exec policy** (item 6): which of the ~10 current sites are measured
   hot paths, and who signs off on new ones?
 - **`dsltools` naming and granularity; semi-public `gt4py.utils` contract;
   is `ffront` semi-public; shim lifetime.** All unchanged from rev. 1.
 - **Type-system consolidation** remains enabled-not-done; the rev. 2 analysis
-  sharpens the target: unify `ScalarKind` (next) with `DTypeKind` (`_core`)
+  sharpened the target: unify `ScalarKind` (next) with `DTypeKind` (`_core`)
   first, since `iterator/type_system` already extends `next/type_system`.
 - **Dependency hygiene:** should `dace` (required install dep, lazily
   imported, one backend) become optional, and `factory` be removed (item 4)?
-  The `>=2.0.0a4` pin on a pre-release dace strengthens the case for
+  The `>=2.0.0a5` pin on a pre-release dace strengthens the case for
   optionality.
 - **ADR impact.** Items 2, 4, 5, 9 touch ADR 0011 (workflow framework) and
-  0017 (toolchain configuration); the root `AGENTS.md` now *requires* ADRs
-  for architectural changes, so the landing sequence should include short
-  successor ADRs in the gt4py repo — this garden note is not the record.
+  0017 (toolchain configuration); the root `AGENTS.md` *requires* ADRs for
+  architectural changes, and ADRs 0023–0025 show the pipeline working — the
+  landing sequence should include short successor ADRs in the gt4py repo;
+  this garden note is not the record.
 - **Python floor.** gt4py still supports 3.10 (the anticipated <3.12 drop has
-  not happened); nothing in this proposal depends on it, but the facade work
-  is a natural moment to schedule the bump.
+  not happened; the in-tree code now even carries explicit 3.10 workarounds,
+  e.g. a `TODO: raise ExceptionGroup once Python 3.10 is dropped`); nothing
+  in this proposal depends on it, but the facade work is a natural moment to
+  schedule the bump.
 - **Relation to in-flight `next` proposals — complementary, not conflicting**
   (unchanged): [[personal/havogt/field-data-protocol|A FieldData protocol for embedded fields]]
   (a layering split one level down, lands inside `_internal/next/embedded`);
@@ -517,9 +606,11 @@ tracks reality:
 
 ## Appendices
 
-- [[personal/egparedes/layered-architecture/layered-architecture_research|Current-state analysis & references (rev. 2)]] —
-  what changed on `main` between the two revisions; the verified dependency
-  structure with rev-1 corrections; the full `otf`, caching/fingerprinting,
-  factory-boy, and allocator catalogs with file paths and code snippets; the
-  updated third-party dependency inventory; the tach-in-gt4py status and
-  layers primer; and the JAX `_src`/facade reference.
+- [[personal/egparedes/layered-architecture/layered-architecture_research|Current-state analysis & references (rev. 3)]] —
+  what changed on `main` between revisions (most recently the compilation
+  runners and crash-consistent caches); the verified dependency structure
+  with corrections to earlier revisions; the full `otf`,
+  caching/fingerprinting, factory-boy, and allocator catalogs with file paths
+  and code snippets; the updated third-party dependency inventory; the
+  tach-in-gt4py status and layers primer; and the JAX `_src`/facade
+  reference.
