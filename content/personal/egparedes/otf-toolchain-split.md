@@ -14,7 +14,7 @@ status: draft
 > DSL-agnostic half (pipeline machinery, source/artifact models, build
 > systems, bindings, compilation runners) becomes the shared **build
 > infrastructure** of [[personal/egparedes/layered-architecture|the layered
-> architecture]]. On the way, the nine-abstraction workflow-combinator
+> architecture]]. On the way, the thirteen-abstraction workflow-combinator
 > framework collapses into plain typed composition (`Step` alias +
 > `CachedStep` + explicit `__call__` dataclasses), the `stages ⇄ definitions`
 > cycle disappears by merging the conjoined pair, and the seam gets its
@@ -30,10 +30,13 @@ status: draft
 > **Parent proposal**:
 > [[personal/egparedes/layered-architecture|A layered architecture for gt4py]]
 > — this note *executes* its items 2 (stage-inspection API), 5 (pipeline, not
-> combinators), 9 (naming pass, partially) and 10 (the `otf.stages ⇄
-> otf.definitions` cycle), *enables* item 4 (plain builders) and refines the
-> layer placement of `otf/binding` with a new finding (§ "Two corrections").
-> Items 1, 3, 6, 7, 8 stay with the parent. Background catalogs live in
+> combinators), 4 (plain builders — phase 6 below), the naming half of item 9
+> (the stale-docs half stays with the parent), the `otf.stages ⇄
+> otf.definitions` cycle of item 10 (the other three cycles stay with the
+> parent), and the `key_function`-deletion half of item 1 (phase 0); it also
+> refines the layer placement of `otf/binding` with a new finding (§ "Two
+> corrections"). Item 1's `CachedStep.persistent` half and items 3, 6, 7, 8
+> stay with the parent. Background catalogs live in
 > [[personal/egparedes/layered-architecture/layered-architecture_research|the
 > parent's research appendix]] (§4 in particular) and are not repeated here.
 
@@ -101,8 +104,9 @@ evidence verified in the current tree.
 6. **The seam has no sanctioned interface.** The one consumer that needs an
    intermediate stage (`runners/dace/program.py:79-95`) duck-types through
    `backend.executor.translation`, `assert hasattr`, unwraps `CachedStep`,
-   and mutates a frozen instance — the cost of having no observer/inspection
-   API at the core↔infrastructure seam (parent item 2).
+   and mutates the envelope's frozen `CompileTimeArgs` via
+   `object.__setattr__` (`program.py:62-69`) — the cost of having no
+   observer/inspection API at the core↔infrastructure seam (parent item 2).
 7. **Small DRY debts.** `options.py` maintains a `TypedDict` mirror of
    `CompilationOptions` kept in sync by a runtime `assert` (noted, not fixed
    here: the decorator's `Unpack[TypedDict]` kwargs typing requires the
@@ -172,19 +176,19 @@ once.
 next/backend.py         # Toolchain (ex Backend) + Transforms (plain code) + CompilePipeline (ex recipes)
 next/otf/
   # DSL-aware half (future toolchain core)
-  stages.py             # ProgramWithArgs pair (ex toolchain.ConcreteArtifact) + definition-stage
-                        #   union + CompilableProgram + step type aliases (absorbs definitions.py)
+  stages.py             # definition-stage union + CompilableProgram + step type aliases
+                        #   (absorbs definitions.py; the generic pair type does NOT live here — see below)
   arguments.py          # argument model (unchanged home; parent item 6 applies here)
   options.py            # CompilationOptions
   compiled_program.py   # CompiledProgramsPool, wait_for_compilation
   compilation_tasks.py  # main-side task preparation
   # DSL-agnostic half (future infra)
-  workflow.py           # Step alias + CachedStep + stage-observer hook — nothing else
+  workflow.py           # Step alias + CachedStep + ProgramWithArgs pair + stage-observer hook
   artifacts.py          # NEW: code specs (ex code_specs.py) + ProgramSource/BindingSource/
                         #   ExtensionSource + CompilationArtifact + ExecutableProgram + BuildSystemProject
   runners.py            # unchanged; its otf-side import narrows to artifacts.py → formally IR-free
   binding/  compilation/  cpp_utils.py   # unchanged until phase 5; binding/ pending the surgery
-  # deleted: definitions.py, toolchain.py, recipes.py (shimmed one release)
+  # deleted: definitions.py, toolchain.py, recipes.py, code_specs.py (all shimmed one release)
 ```
 
 ### After relocation (phase 5, = parent steps 6b/6c/6f + 7)
@@ -216,7 +220,7 @@ relocation, where per-module shims exist anyway — the in-place phases change
 | Today | Interim (phases 0–4) | Final (phase 5) | Layer | Deciding fact |
 | --- | --- | --- | --- | --- |
 | `otf/workflow.py` | shrinks to `Step` + `CachedStep` + observer | `infra/pipeline.py` | infrastructure | generic; `CachedStep` is the one deep combinator |
-| `otf/toolchain.py` | **deleted** (pair type → `stages.py`; adapters inlined) | — | — | 3 adapters, 9 lines of logic, 5 call sites |
+| `otf/toolchain.py` | **deleted** (pair type → `workflow.py`; adapters inlined) | — | — | 3 adapters, 9 lines of logic, 5 call sites; the pair type must stay in a DSL-neutral bottom module because `ffront/stages.py:32` imports it at module level |
 | `otf/definitions.py` | **merged into** `stages.py` | — | — | conjoined with `stages.py`; the cycle dies with the merge |
 | `otf/stages.py` (def-side) | `stages.py` | `toolchain/stages.py` | core | imports itir + ffront stages |
 | `otf/stages.py` (source/artifact side) + `code_specs.py` | **new** `artifacts.py` | `infra/artifacts.py` | infrastructure | no IR imports; what any build knows |
@@ -226,13 +230,13 @@ relocation, where per-module shims exist anyway — the in-place phases change
 | `otf/compiled_program.py` | unchanged | `toolchain/pool.py` | core | orchestration above `Toolchain.compile` |
 | `otf/compilation_tasks.py` | unchanged | `toolchain/tasks.py` | core | decides what only the main process can do |
 | `otf/runners.py` | imports `artifacts.py` | `infra/runners.py` | infrastructure | ADR 0024's execution service; IR-free after the merge |
-| `otf/compilation/` | unchanged | `infra/build/` | infrastructure | multi-backend + external-tooling seam |
+| `otf/compilation/` | drops its `definitions` import + `CompilationStep` base (phase 1); otherwise unchanged | `infra/build/` | infrastructure | multi-backend + external-tooling seam; `compiler.py:17,90` is its only IR-side edge today |
 | `otf/binding/` + `cpp_utils.py` | unchanged | `infra/bindings/` | infrastructure **after surgery** | type-system-bound today (see below) |
 | `next/backend.py` | `Toolchain` (+ aliases) | `toolchain/toolchain.py` | core | the toolchain root object |
 
 ## The interfaces, concretely
 
-### Pipeline machinery: two exports instead of nine
+### Pipeline machinery: three exports instead of thirteen
 
 ```python
 # infra/pipeline.py (interim: otf/workflow.py)
@@ -241,7 +245,20 @@ type Step[S, T] = Callable[[S], T]          # the whole "framework"
 @dataclasses.dataclass(frozen=True)
 class CachedStep[S, T, H]:                   # kept as-is: the one deep module
     ...  # in_memory() / persistent() / cache_key() / __call__ — unchanged interface
+
+@dataclasses.dataclass                       # NOT frozen: freezing the envelope would be a
+class ProgramWithArgs[DefT, ArgsT]:          #   behavior change (it is mutable today), deferred
+    definition: DefT                          # ex toolchain.ConcreteArtifact / .data
+    args: ArgsT
 ```
+
+The generic pair type lives *here*, in the DSL-neutral bottom module — not in
+the core `stages.py` — because `ffront/stages.py:32` parameterizes it at
+module-import time (the four `Concrete*Def` aliases), while the merged
+`stages.py` imports `ffront.stages` for the definition union. Today's
+`toolchain.py` plays exactly this bottom-module role; putting the pair
+anywhere DSL-aware would recreate the `stages ⇄ ffront.stages` cycle one seam
+over.
 
 Named pipelines become frozen dataclasses with an **explicit, fully typed**
 `__call__` — composition you can read *and* that mypy actually checks
@@ -266,12 +283,18 @@ Customization stays composition-time, per ADR 0011, via plain
 `ReplaceEnabledWorkflowMixin` was always a pass-through to it.
 `backend.Transforms` gets the same treatment: its `match`-based `step_order`
 becomes a `match`-based `__call__` that calls the steps directly and threads
-`(definition, args)` explicitly — `MultiWorkflow` and the three adapters
-exist only to spare it that threading. The ffront `adapted_*_factory`
-wrappers shrink to their bare step factories (the `CachedStep.in_memory`
-wrapping is unchanged; it caches the data-only function, so keys don't
-change). `make_step`/`StepSequence`/`.chain` rewrites are one-liners at
-their 4 call sites.
+`(definition, args)` explicitly. The three adapters serve **two** consumer
+groups, and both are in the rewrite inventory of the combinator phase: the
+`Transforms` pipeline itself, and the *per-step external callers* that today
+wrap a stage into a pair only to unwrap `.data` from the result —
+`decorator.py` (`past_lint` at `:270`, `func_to_past` at `:295`,
+`func_to_foast` at `:611`) and `foast_to_past.OperatorToProgram` (`:86`).
+For those callers the bare data-only steps are strictly *simpler*: call the
+step, drop the wrap/unwrap dance. The ffront `adapted_*_factory` wrappers
+shrink to their bare step factories (the `CachedStep.in_memory` wrapping is
+unchanged; it caches the data-only function, so keys don't change).
+`make_step`/`StepSequence`/`.chain` rewrites are one-liners at their 4 call
+sites.
 
 What ADR 0011's decisions become (the successor ADR's core table):
 
@@ -287,22 +310,26 @@ What ADR 0011's decisions become (the successor ADR's core table):
 
 ```python
 # toolchain/stages.py (core; interim otf/stages.py — absorbs definitions.py)
-@dataclasses.dataclass(frozen=True)
-class ProgramWithArgs[DefT, ArgsT]:          # ex toolchain.ConcreteArtifact
-    definition: DefT                          # ex .data
-    args: ArgsT
-
 type ProgramDefinition = (DSLFieldOperatorDef | DSLProgramDef | FOASTOperatorDef
                           | PASTProgramDef | itir.Program)   # ex IRDefinitionT TypeVar
 
-@dataclasses.dataclass(frozen=True)
-class CompilableProgram:                      # ex CompilableProgramDef alias — now concrete
-    definition: itir.Program                  # concrete types at the boundary (JAX convention);
-    args: CompileTimeArgs                     # also what crosses the process boundary in ADR 0024
+@dataclasses.dataclass                        # freezing deferred, like the pair type: the dace
+class CompilableProgram:                      #   mutation site lives until phase 3
+    definition: itir.Program                  # ex CompilableProgramDef alias — now concrete
+    args: CompileTimeArgs                     # (JAX convention); crosses the process boundary (ADR 0024)
 
 type TranslationStep[C: SourceCodeSpec] = Step[CompilableProgram, ProgramSource[C]]
 # BindingStep protocol: deleted (zero users); CompilationStep: alias, same pattern
 ```
+
+Classes that today *inherit* the step protocols drop those bases in the same
+phase-1 PR — structural typing already covers them: `CPPCompiler` subclasses
+`definitions.CompilationStep` (`compiler.py:90`, with the import at
+`compiler.py:17`), and dace's `DaCeTranslationStep`/`DaCeCompiler` and gtfn's
+`GTFNTranslationStep` do the equivalent. The `compiler.py` edit is not
+optional polish: it is what actually removes `otf/compilation/`'s only
+IR-side import edge, and a `type` alias cannot be subclassed, so leaving the
+base in place would break the moment the protocol becomes an alias.
 
 ```python
 # infra/artifacts.py (interim otf/artifacts.py) — no IR, no ts after the surgery
@@ -317,9 +344,12 @@ BuildSystemProject                  # internal-only protocol, kept for the two b
 `GTFNBackendFactory.Params.key_function` are deleted;
 `compilable_program_fingerprinter` (the strict alias used by both persistent
 translation caches) moves next to `CachedStep`'s users' call sites unchanged.
-The duplicate `compiler.CompilationError` is retired in favor of
-`errors.exceptions.CompilationError` (every external reference already
-resolves there).
+The duplicate `compiler.CompilationError` is flagged for retirement, but
+**not** as a behavior-preserving cleanup: the two classes differ in base
+(`RuntimeError` vs `GT4PyError(Exception)`) and in message formatting, so
+unifying them changes what `except` clauses catch at `compiler.py:123` — it
+is queued as its own small decision in the open questions, outside the
+no-behavior-change ladder.
 
 ### Toolchain: the deep root object, with the missing sanctioned entries
 
@@ -329,25 +359,37 @@ resolves there).
 class Toolchain(Generic[DeviceTypeT]):        # ex Backend — executes the in-tree TODO
     name: str
     frontend: Step[ProgramWithArgs, CompilableProgram]        # ex .transforms
-    backend: CompilePipeline                                  # ex .executor — note: concrete type
+    backend: Step[CompilableProgram, CompilationArtifact]     # ex .executor; a CompilePipeline for gtfn/dace
     allocator: next_allocators.FieldBufferAllocatorProtocol[DeviceTypeT]
 
     def compile(self, definition, compile_time_args) -> ExecutableProgram: ...   # as today
-    def translate(self, definition, compile_time_args, **step_options) -> ProgramSource:
-        """Sanctioned partial run: frontend + (optionally reconfigured) translation only."""
+    def translate(self, definition, compile_time_args) -> ProgramSource:
+        """Sanctioned partial run: frontend + translation only.
+
+        Narrows `self.backend` to the standard `CompilePipeline` shape;
+        raises a clear error on monolithic backends (which support no stage
+        inspection today either).
+        """
 ```
 
 Two deliberate hardenings, both enabled by the consumer map:
 
-- `backend` is typed as the **concrete** `CompilePipeline`, not
-  `Step[CompilableProgram, CompilationArtifact]`: every backend (gtfn, dace,
-  roundtrip) already conforms or trivially can (roundtrip's bindings step is
-  the identity). This is what makes `translate()` implementable *and typed* —
-  and it deletes the `assert hasattr` at `dace/program.py:83`.
-- `translate(..., **step_options)` applies option overrides to the
-  translation step via `replace`, unwrapping `CachedStep` in exactly one
-  place (Toolchain owns that knowledge; today it lives in dace's reach-in,
-  which also mutates a frozen stage via `object.__setattr__`).
+- `backend` stays **structurally** typed: gtfn and dace already have the
+  three-step `CompilePipeline` shape, but **roundtrip does not** —
+  `Roundtrip` (`roundtrip.py:257-280`) is a monolithic single step with no
+  `ProgramSource` intermediate, so forcing it into the shape would be a
+  real (small) redesign, not a rename; it is listed as an open question.
+  `translate()` therefore narrows to `CompilePipeline` in one typed place
+  and raises a clear error for monolithic backends — still strictly better
+  than the `assert hasattr` at `dace/program.py:83`, which it deletes.
+- `translate()` takes **no per-call step options** — reconfiguration stays
+  composition-time, ADR 0011's own rule (and a bare `Step` callable has no
+  `.replace` for an options API to lean on). A caller needing a variant
+  translation step builds a variant pipeline with `dataclasses.replace`;
+  `CachedStep.step` is part of `CachedStep`'s interface for exactly this.
+  Concretely, dace's `__sdfg__` path holds a dedicated translate-only
+  pipeline built once next to its backend definition, instead of
+  duck-typing into the default one and mutating its stages.
 
 The **stage observer** rides the existing `instrumentation/hook_machinery`
 (an event hook `stage_hook(name, artifact)` emitted by `CompilePipeline` and
@@ -400,32 +442,48 @@ Gates for every PR, per gt4py's own `AGENTS.md`: full `test_next` suite,
 `uv run tach check`, `pre-commit` (ruff/mypy), no behavior change. Conventional
 title `refactor[next]: ...`.
 
-0. **Trivial deletions.** `SkippableStep` (+ its absence from tests),
-   `key_function` + `fast_compilable_program_fingerprinter`, `BindingStep`
-   protocol, duplicate `CompilationError`. *(Zero risk; shrinks the surface
-   before anything moves.)*
-1. **Merge `definitions.py` into `stages.py`; extract `artifacts.py`.**
-   Kills the cycle (parent item 10, `otf` part); `runners.py` becomes
-   formally IR-free; in-repo imports updated, deleted modules shimmed.
-2. **Pipeline, not combinators.** Explicit `__call__` in
-   `CompilePipeline`-né-`OTFCompileWorkflow` and `Transforms`; delete
-   `MultiWorkflow`, `NamedStepSequence`, `StepSequence`, `make_step`,
-   `chain`, both mixins, all three adapters; introduce `Step`; simplify the
-   seven ffront factories; rewrite the two factory-boy `Meta.model` usages
-   against the new class; update `docs/user/next/advanced/HackTheToolchain.md`
-   (it teaches the machinery this deletes). **Lands with the successor ADR
-   to 0011** (append-only policy; the supersession table above is its core).
-3. **Naming.** `Backend → Toolchain` + field renames with deprecation
-   aliases; `next/AGENTS.md` + tutorial updated. Part of the same ADR.
-4. **Observability.** `stage_hook` + `GT4PY_DUMP_STAGES` +
+0. **Trivial deletions.** `SkippableStep` — together with its section in
+   `docs/user/next/advanced/WorkflowPatterns.md`, which still documents it
+   as user-facing API (its "zero users" are zero *code* users) — plus
+   `key_function` + `fast_compilable_program_fingerprinter` (the second
+   half of parent item 1) and the `BindingStep` protocol. *(Zero risk.)*
+   The duplicate `CompilationError` is deliberately **not** here — see the
+   open questions.
+1. **Merge `definitions.py` into `stages.py`; extract `artifacts.py`; move
+   the pair type to `workflow.py`.** Kills the `stages ⇄ definitions` cycle
+   *without recreating it against `ffront.stages`* (the pair stays in the
+   DSL-neutral bottom module); drops the step-protocol base classes in
+   `compiler.py`, dace, and gtfn (structural typing suffices) — the edit
+   that makes `runners.py` *and* `compilation/` formally IR-free; in-repo
+   imports updated; all four deleted modules shimmed (incl. `code_specs`).
+2. **Naming.** `Backend → Toolchain` + field renames with deprecation
+   aliases; `next/AGENTS.md` + tutorials updated. **Lands with the
+   successor ADR to 0011/0017** (append-only policy; the supersession table
+   above is its core), which also records phases 3-4.
+3. **Observability.** `stage_hook` + `GT4PY_DUMP_STAGES` +
    `Toolchain.translate`; delete the dace reach-in
-   (`dace/program.py:62-95`). *(Parent item 2, done.)*
+   (`dace/program.py:62-95`), replaced by a dace-owned translate-only
+   pipeline. *(Parent item 2, done.)* **Ordering constraint: must land
+   before phase 4** — the reach-in is the last external consumer of the
+   mixins' `.replace`.
+4. **Pipeline, not combinators.** Explicit `__call__` in
+   `CompilePipeline`-né-`OTFCompileWorkflow` and `Transforms` (which take
+   over emitting the phase-3 hooks); delete `MultiWorkflow`,
+   `NamedStepSequence`, `StepSequence`, `make_step`, `chain`, both mixins,
+   all three adapters; introduce `Step`; simplify the seven ffront
+   factories **and their per-step external callers** (`decorator.py` ×3,
+   `foast_to_past.OperatorToProgram`); rewrite the two factory-boy
+   `Meta.model` usages against the new class; update **both** advanced
+   guides — `HackTheToolchain.md` *and* `WorkflowPatterns.md` (the latter
+   teaches `StepSequence.chain`, `make_step`, `ChainableWorkflowMixin`, and
+   `CachedStep` at length).
 5. **Relocation** (when the parent's `_internal` skeleton lands — its steps
    6b/6c/6f/7): move per the module map, shims at all old `otf.*` paths,
    `scripts/python/dace_determinism.py` repointed, tach modules declared per
    the final layers. **Enabler PR**: the bindings parameter surgery,
    immediately before or with the `bindings/` move.
-6. **Plain builders** (parent item 4, unblocked by 2+3): `make_*_toolchain()`
+6. **Plain builders** (parent item 4, executed here; unblocked by phases 2
+   and 4): `make_*_toolchain()`
    functions replacing the eight factory-boy factories; supersedes ADR 0017's
    factory-boy decision; resolves the in-tree conflict with
    `roundtrip.py:283`'s `TODO: introduce factory` the other way.
@@ -442,7 +500,9 @@ requires the parent's step 3 intra-`next` module declarations):
 path = "gt4py.next.otf.workflow"      # + artifacts, runners, compilation
 depends_on = [ { path = "gt4py._core" }, { path = "gt4py.eve" },
                { path = "gt4py.next.config" }, { path = "gt4py.next.fingerprinting" },
-               { path = "gt4py.next.otf.artifacts" } ]   # note: no IR-side edges
+               { path = "gt4py.next.otf.artifacts" } ]   # no IR-side edges — true once
+                                                         # phase 1 drops compiler.py's
+                                                         # `definitions` base-class import
 ```
 
 ## What this deliberately does *not* do
@@ -455,8 +515,9 @@ depends_on = [ { path = "gt4py._core" }, { path = "gt4py.eve" },
   the largest strides toward it that don't require one (parent's stance,
   unchanged).
 - **No `cartesian` changes** — but after phase 5 the build/cache/bindings
-  services finally have a home `cartesian` can be repointed at (parent
-  step 10).
+  services finally have a home `cartesian` can be repointed at (the
+  per-service repointing of parent step 6; the full fold-in under
+  `_internal` is its step 10).
 - **No argument-model surgery** — `CompileTimeArgs`' runtime
   `offset_provider` straddle (parent item 6) stays blocked on the
   temporaries-pass TODO; it lives in `arguments.py`, which this proposal
@@ -490,11 +551,18 @@ depends_on = [ { path = "gt4py._core" }, { path = "gt4py.eve" },
 - **Shim lifetime**: which `otf.*` deep paths does icon4py (or other
   downstream) actually import? Needs the audit the parent schedules for its
   step 9; until then all old paths get shims.
-- **`Toolchain.backend: CompilePipeline` concreteness**: it hardens the seam
-  but demands roundtrip conform (identity bindings step) and constrains
-  exotic future backends to the three-step shape. The escape hatch — keep
-  the `Step` annotation and make `translate()` best-effort — weakens the
-  reach-in fix. Recommend concrete; needs the backend owners' assent.
+- **Should roundtrip be factored into the three-step shape?** `Roundtrip`
+  is a monolithic single step today, which is why `Toolchain.backend` stays
+  structurally typed and `translate()` narrows at runtime. Factoring its
+  `_generate_source` into a real translation step would permit the concrete
+  `CompilePipeline` annotation (a stronger, fully static seam) — small but
+  genuine redesign work; needs the backend owners' call.
+- **The `CompilationError` twins**: `otf/compilation/compiler.py:140`
+  (subclasses `RuntimeError`) shadows `errors.exceptions.CompilationError`
+  (subclasses `GT4PyError`, rewrites the message). Unifying them is
+  desirable but changes what downstream `except` clauses catch and what the
+  message looks like — a deliberate, small, *behavior-affecting* decision to
+  schedule separately from this proposal's no-behavior-change ladder.
 - **Does the observer need to see *frontend* stages too** (FOAST/PAST), or
   only the compile pipeline's three? The hook design supports both; the
   question is which stage names become API.
