@@ -719,7 +719,7 @@ An **open design axis, not a settled choice.** Both the scalar-element body
 
 | | scalar element (`scalar_operator`) | level slice (`field_operator`) | whole column (§4.8) |
 | --- | --- | --- | --- |
-| per-column `if` | native Python `if` | `where` only (branch-free) | native |
+| per-column `if` | native Python `if` — but **not** under the `vmap ∘ lax.scan` lowering below | `where` only (branch-free) | native |
 | embedded NumPy/CuPy | array ops if branch-free; Python per element only where `if` is data-dependent | array op per level | array op per col. batch |
 | JAX lowering | `vmap`(orthogonal) ∘ `lax.scan` — canonical NWP pattern (§B.1), **not** "none" | array `lax.scan` | manual |
 | reuse in field context | `*_scalar` twins (P6) — **removed once `map` exists** (below) | calls field operators directly | n/a |
@@ -734,6 +734,22 @@ off when a whole warp of columns is inactive. The earlier draft's "always
 `where`, treat work-skipping as a masking transformation (§3.6.4)" stance is one
 position; the counter-position is that some physics is clearer and faster with
 `if`, so the scalar body stays first-class. Both kept; the decision is open (§5).
+
+**Measured: native `if` and the `vmap ∘ lax.scan` lowering are mutually
+exclusive.** The scalar body's `if` survives eager embedded execution
+(NumPy/CuPy, eager JAX) and the compiled backends' per-column loop — that is
+where the warp-skipping argument holds — but not under the JAX lowering this
+table pairs it with, because the predicate is a tracer and Python `if` needs a
+concrete bool: `TracerBoolConversionError: Attempted boolean conversion of traced
+array with shape bool[]`. The `bool[]` matters: `vmap ∘ lax.scan` *does* restore
+scalar shape (the slice-body failure is the different `ValueError: truth value of
+an array with more than one element is ambiguous`), but not concreteness, and no
+JAX transform makes a data-dependent branch concrete. So `if` vs `where` is not
+purely a body-granularity axis, it is also a lowering axis: under JAX the body
+must be branch-free whichever granularity wins, and the scalar body's `if`
+advantage argues for the compiled backends only. Reproducer:
+[`scan-redesign/scan_jax_lowering.py`](scan-redesign/scan_jax_lowering.py), which
+also checks that the `if` genuinely does work in embedded execution today.
 
 **`scalar_operator` + elemental `map`.** Two historical arguments against scalar
 bodies dissolve once a scalar kernel can be *lifted* explicitly. We float a `map`
@@ -753,6 +769,19 @@ an **array `lax.scan`** with horizontal-slice-valued carry (slice body); (ii) a
 JAX-canonical); (iii) a **full-field** version with explicit per-level array ops
 and no scan primitive. The winner for NWP shapes (k≈100, large horizontal) is open
 and a prerequisite for choosing the default body granularity (§5).
+
+A first data point, CPU only, 64×64×80, all variants verified against a scalar
+reference loop
+([`scan-redesign/scan_jax_lowering.py`](scan-redesign/scan_jax_lowering.py)):
+(i) and (ii) both land at **≈0.45 ms** (best of seven batches of ten), against
+**≈125 ms** for today's per-element double Python loop. Single runs are not
+usable at this scale — the spread reaches ~2× and the ordering between (i) and
+(ii) flips run to run — so the honest reading is that the two lowerings are
+*indistinguishable* here, at roughly 250× the status quo, and keeping the body
+scalar costs nothing measurable. This does not answer the question the paragraph
+poses — CPU rather than GPU, and 4096 columns is small against NWP horizontals —
+but it does suggest the choice will not be decided by (i)-vs-(ii) throughput
+alone.
 
 Whole-column kernels (write the k-loop yourself) stay the §4.8 escape hatch:
 maximal freedom, but the toolchain loses the recurrence structure (no interval
@@ -893,11 +922,14 @@ whole-column kernel as an explicit escape hatch rather than stretching the scan.
     unspecified association needs an explicit opt-in/opt-out flag or "write the
     fold" suffices as the reproducibility story (§3.5).
 11. **Body granularity, `if` vs `where`, and `scalar_operator` (§4.1).** Keep the
-    scalar-element body first-class — native `if`, the `vmap ∘ lax.scan` lowering,
-    elemental `map` reuse — alongside the slice body, or commit to slice-only with
-    `where`? The empirical JAX lowering comparison (array `lax.scan` vs
-    `vmap ∘ lax.scan` vs full-field) should drive the default; until measured,
-    neither is the obvious winner.
+    scalar-element body first-class — native `if` (compiled backends and eager
+    embedded only — *not* under `vmap ∘ lax.scan`, §4.1), the `vmap ∘ lax.scan`
+    lowering, elemental `map` reuse — alongside the slice body, or commit to
+    slice-only with `where`? The empirical JAX lowering comparison (array
+    `lax.scan` vs `vmap ∘ lax.scan` vs full-field) should drive the default; a
+    first CPU measurement (§4.1) puts the two scan lowerings within noise, so the
+    decision likely turns on GPU behaviour and on how much the `if` matters for
+    the compiled backends.
 12. **Elemental `map` (§4.1).** Spelling and semantics of promoting a
     `scalar_operator` point-wise over fields (the Fortran-`elemental` analog), how
     it composes with `scan`/`fold`, and whether it fully subsumes the `*_scalar`
