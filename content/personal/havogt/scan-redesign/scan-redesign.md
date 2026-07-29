@@ -747,7 +747,9 @@ an array with more than one element is ambiguous`), but not concreteness, and no
 JAX transform makes a data-dependent branch concrete. So `if` vs `where` is not
 purely a body-granularity axis, it is also a lowering axis: under JAX the body
 must be branch-free whichever granularity wins, and the scalar body's `if`
-advantage argues for the compiled backends only.
+advantage argues for the compiled backends only. Reproducer:
+[`scan-redesign/scan_jax_lowering.py`](scan-redesign/scan_jax_lowering.py), which
+also checks that the `if` genuinely does work in embedded execution today.
 
 **`scalar_operator` + elemental `map`.** Two historical arguments against scalar
 bodies dissolve once a scalar kernel can be *lifted* explicitly. We float a `map`
@@ -769,11 +771,15 @@ and no scan primitive. The winner for NWP shapes (k≈100, large horizontal) is 
 and a prerequisite for choosing the default body granularity (§5).
 
 A first data point, CPU only, 64×64×80, all variants verified against a scalar
-reference loop: array `lax.scan` **0.70 ms**, `vmap ∘ lax.scan` **0.81 ms**,
-today's per-element double Python loop **122 ms**. So (i) and (ii) sit within
-noise of each other at ~150× the status quo, i.e. keeping the body scalar costs
-nothing measurable here. This does not answer the question the paragraph poses —
-it is CPU rather than GPU, and 4096 columns is small against NWP horizontals —
+reference loop
+([`scan-redesign/scan_jax_lowering.py`](scan-redesign/scan_jax_lowering.py)):
+(i) and (ii) both land at **≈0.45 ms** (best of seven batches of ten), against
+**≈125 ms** for today's per-element double Python loop. Single runs are not
+usable at this scale — the spread reaches ~2× and the ordering between (i) and
+(ii) flips run to run — so the honest reading is that the two lowerings are
+*indistinguishable* here, at roughly 250× the status quo, and keeping the body
+scalar costs nothing measurable. This does not answer the question the paragraph
+poses — CPU rather than GPU, and 4096 columns is small against NWP horizontals —
 but it does suggest the choice will not be decided by (i)-vs-(ii) throughput
 alone.
 
