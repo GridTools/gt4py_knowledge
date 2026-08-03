@@ -19,188 +19,196 @@ created: 2026-08-03
 status: draft
 ---
 
-> **TL;DR** Make `premap` work under `jax.jit` by giving a connectivity a small,
-> eagerly-computed **bounds descriptor** (`value_min`, `value_max`, `support_box`) as
-> pytree *aux data* and putting the neighbour table in pytree *children*. Domain
-> inference then answers from integers instead of from table contents, so the table
-> becomes a runtime argument rather than a compiled-in constant, and one compiled
-> program serves every mesh of the same shape and bounds.
+> **TL;DR** Make `premap` work under `jax.jit` by registering a connectivity as a pytree
+> whose **child** is the neighbour table and whose **aux data** carries a handle to the
+> same buffer, keyed on `id(ndarray)`. Domain inference reads the handle — concrete at
+> trace time — so it works for **narrowing** as well as covering ranges, while the table
+> travels as a runtime argument instead of being compiled into the module.
 
 ## Problem
 
-`gt4py.next`'s embedded backend can run on JAX arrays, and a `Field` already crosses a
-`jax.jit` boundary cleanly: the `Domain` is static pytree aux data, the array is the
-single traced child. Connectivities do not, and `premap` — the gather through a
-neighbour table — is the operation that breaks.
+A `Field` already crosses a `jax.jit` boundary cleanly: `Domain` is static pytree aux
+data, the array is the traced child. Connectivities do not, and `premap` is where it
+breaks, because it uses the table for two things that pull opposite ways:
 
-`premap` does two things with the table, and they pull in opposite directions:
+- **domain inference** — `inverse_image` derives the *output domain* from the table's
+  **contents** (`_hyperslice`: `nonzero`/`min`/`max`/`any`/`all` → Python `slice`s). Needs
+  concrete values.
+- **the gather** — needs the table on device as a runtime argument, at ICON scale.
 
-- **domain inference.** `inverse_image` derives the *output domain* from the table's
-  **contents** via `_hyperslice`, which uses `nonzero`/`min`/`max`/`any`/`all` and
-  returns Python `slice` objects. This needs concrete values.
-- **the gather itself.** Needs the table on device, as a runtime argument, for meshes
-  of ICON scale.
+A connectivity captured as a **closure** keeps contents concrete but JAX inlines the
+whole table into the compiled module. Registered as a **plain pytree node** it becomes a
+runtime argument but inference receives a tracer.
 
-Under `jax.jit` you cannot have both with the obvious encodings. A connectivity
-captured as a **closure** keeps the table concrete but JAX inlines it into the
-compiled module as a constant. A connectivity registered as a plain **pytree node**
-makes the table a runtime argument but hands `inverse_image` a tracer.
+Compounding this, `_hyperslice` is untraceable *by construction*: `jnp.nonzero` has a
+data-dependent output shape and cannot be staged without an explicit `size=`. Inference
+must run eagerly no matter what else changes.
 
-There is a second, independent obstacle: `_hyperslice` is *untraceable by
-construction*, because `jnp.nonzero` has a data-dependent output shape and cannot be
-staged without an explicit `size=`. Whatever else changes, inference must run eagerly.
+**The domain generally does not cover the connectivity's image.** Narrowing is the normal
+case, not the exception. Any design whose fast path handles only the covering case is
+partial support and is rejected.
 
 ## Constraints
 
-1. **The inference result depends on `image_range`**, which comes from the field being
-   premapped and differs between calls. It cannot be precomputed once per connectivity.
-2. **The table is large.** ICON meshes have several connectivities of millions of rows.
-   Anything that scales with table size per compiled program is disqualified.
-3. **icon4py is distributed.** Whatever is static must be meaningful per rank.
+1. **Inference depends on `image_range`**, which comes from the field being premapped and
+   differs between calls — it cannot be precomputed once per connectivity.
+2. **Narrowing is the common case.** See above. This is the constraint that decides the
+   design.
+3. **The table is large** — millions of rows, several per mesh. Nothing may scale with
+   table size per compiled program.
 4. **Gathers must be differentiable** — 4D-var is the motivating use case.
 5. `Field.__eq__` is elementwise by design, so fields and connectivities can never be
-   JAX `static_argnums` (which require `__eq__` to be a real predicate).
+   `static_argnums` (which require `__eq__` to be a real predicate).
 
 ## Design
 
-### The bounds descriptor
-
-At construction, one eager pass over the table records:
-
-```
-value_min     minimum over non-skip entries
-value_max     maximum over non-skip entries
-support_box   per-axis bounding box of non-skip *positions*
-```
-
-All Python ints. This is a property of the connectivity's *type* in the same sense
-`max_neighbors` already is, and it is the same move jax-md makes with `max_occupancy`
-and PyG with `EdgeIndex._sparse_size`: measure the table once eagerly, carry the small
-answer as metadata.
-
-### Two paths in `inverse_image`
-
-**Covering path** — when `image_range` covers `[value_min, value_max]` *and* does not
-contain `skip_value`:
-
-```
-return domain.slice_at[support_box]
-```
-
-Pure integer arithmetic. No contact with the buffer, so it behaves identically under
-`jit`, `grad`, `vmap` and `shard_map`, and for NumPy and CuPy.
-
-This is **exact, not an approximation** — see
-[[personal/havogt/jax-connectivities/jax-connectivities_research|the research appendix]]
-for the brute-force check (0 mismatches in 2 531 covering cases out of 18 458 pairs).
-The `skip_value ∉ image_range` guard is load-bearing: without it, 176 of those cases
-disagree.
-
-**Narrowing path** — when the field's domain does not cover the table's image. Keep
-today's `_hyperslice` under `jax.ensure_compile_time_eval()`, which evaluates eagerly
-at trace time. Under `jit` with a traced table this raises a clear
-`TracerBoolConversionError`, which is the intended contract rather than a defect.
-
-The covering case is the one that matters in practice: icon4py allocates input fields
-over the full horizontal range, and program `domain=` restrictions apply to *outputs*.
-Of the non-covering pairs, only ~9% even yield a valid narrowing — the rest already
-raise "non-contiguous or empty".
-
-### Pytree registration
+Register `JaxArrayConnectivityField` as a pytree node:
 
 ```
 children  = (table,)
-aux_data  = (domain, codomain, skip_value, bounds)
+aux_data  = (domain, codomain, skip_value, Handle(table))
 ```
 
-Everything in aux data is value-typed and small, which matters more than it looks:
-in jaxlib 0.6.2 `PyTreeDef.__hash__` **ignores custom-node aux data entirely**, so
-treedefs collide and are separated by a linear `__eq__` scan on every call. Aux data
-`__eq__` must therefore be O(1) — a frozen dataclass of ints, never an array or a
-lazily-computed property.
+`Handle` is a thin wrapper whose `__eq__`/`__hash__` key on **`id(table)` — the buffer,
+not the connectivity object**. `inverse_image` reads the table through the handle, which
+is an ordinary Python reference and therefore concrete during tracing, and runs today's
+`_hyperslice` under `jax.ensure_compile_time_eval()`.
 
-## Why not the alternatives
+The same buffer is referenced twice in different capacities: as aux data it is read at
+trace time only and never staged; as the child it is passed at call time and gathered
+from on device. No duplication.
 
-**Connectivity as a jit closure** (today). The table is inlined as
-`stablehlo.constant`; in 0.6.2 this is unconditional, with no size threshold. Fatal
-independently of size: a closure constant is replicated on every device, invisible to
-`in_shardings`, not donatable, and JAX refuses outright to close over an array spanning
-non-addressable devices. Multi-node is impossible. A fix exists upstream
-(`JAX_USE_SIMPLIFIED_JAXPR_CONSTANTS`, jax ≥ 0.7.1) but is off by default and not
-available at our pinned version.
+**Verified for genuine narrowing.** Field on `Vertex[0:30000)`, table 120 000×2 with image
+spanning `[0,60000)`:
 
-**Identity-handled concrete table in aux data.** Correct, and the honest encoding of
-"the output domain depends on this exact table" — but it retraces per connectivity
-*object* rather than per mesh (`restrict()` and `as_connectivity_field()` mint fresh
-objects), and it pins the table alive in JAX's compilation cache in a way
-`jax.clear_caches()` does not release. The bounds descriptor removes both.
+```
+jaxpr consts : []
+main params  : %arg0: tensor<30000xf64>, %arg1: tensor<120000x2xi32>
+StableHLO    : 1.4 kB
+out domain   : Domain(Edge=(0:60000), E2V[local]=(0:2))
+```
 
-The decisive difference: with bounds, **two different meshes of the same shape and
-bounds share one compiled program**. Neither alternative can do that.
+Narrowing occurred (`Edge` 120 000 → 60 000), the table stayed a jit **argument**, nothing
+was inlined. The `restrict()` that follows slices the *traced* child with Python slices,
+which is fully traceable.
 
-## Independent defect found while researching this
+### Why keying on the buffer matters
 
-`_gather_premap` relies on `-1` wrapping around, masking only later inside
-`_make_reduction`. Under `grad` this produces **NaN gradients**, because the
-sentinel gathers a real element which then flows through the operator's
-nonlinearities. This is a correctness blocker for 4D-var and is unrelated to
-everything above.
+Retrace granularity is per **buffer**, not per wrapper object: reconstructing the
+connectivity around the same array does not retrace; re-uploading the array does.
+gt4py's normal flow already reuses buffers — `FieldOffset.as_connectivity_field()`
+memoizes on `id(offset_definition)` and returns the same object, fed from the user's
+stable offset-provider dict. So in practice this is **one trace per mesh**.
 
-The fix is to sanitise the *index* before the gather (`where(table != skip, table, 0)`)
-rather than the operand — one `where`, done once in `_gather_premap`, and it also
-removes an existing oddity where the domain-start offset shifts `-1` to a different
-wrapped element. **Worth doing on its own, ahead of any JAX work.**
+A content digest would additionally let two separately-uploaded copies of the same table
+share a compiled program. It costs a full hash per new buffer and should not be added
+speculatively.
 
-Related: `_make_reduction` masks against the module-level `common._DEFAULT_SKIP_VALUE`
-instead of the connectivity's own `skip_value`.
+### Optional, free optimisation
+
+An eagerly-computed `(value_min, value_max, support_box)` descriptor lets `inverse_image`
+skip the table read *when the range happens to cover* — pure integer arithmetic, exact
+(brute-forced: 0 mismatches in 2 531 covering cases, given a `skip_value ∉ image_range`
+guard). This is a shortcut inside the general path, never a fallback boundary, so it
+changes no contract. Worth having; not load-bearing.
+
+## Rejected alternatives
+
+**Connectivity as a jit closure** (today). The table is inlined as `stablehlo.constant` —
+unconditional in jax 0.6.2, no size threshold. Fatal independently of size: closure
+constants are replicated per device, invisible to `in_shardings`, not donatable, and JAX
+*refuses outright* to close over an array spanning non-addressable devices, so multi-node
+is impossible. An upstream fix exists (`JAX_USE_SIMPLIFIED_JAXPR_CONSTANTS`, jax ≥ 0.7.1)
+but is off by default and postdates our pin.
+
+**Static bounds descriptor as the design.** Exact only in the covering case, falling back
+to eager inference otherwise — i.e. precisely the partial support that is out of scope.
+Demoted to the optimisation above.
+
+**Caller-supplied output domain.** The `segment_sum(num_segments=)` / jraph / e3nn-jax
+analogy does *not* transfer: those declare a trivial quantity the caller already knows,
+whereas a narrowed gt4py domain is a non-trivial function of table contents that nobody
+upstream of `inverse_image` knows. Declaring it means the caller re-runs the same O(n)
+scan by hand, and field view gives up automatic domain inference — a core promise
+(ADRs 0010, 0020). Keep it as an explicit **escape hatch for `as_offset`**, whose table
+is built from a runtime field so no eager metadata can ever exist.
+
+**Host-mirrored per-row/block bounds.** A summary is not a distinct design — any O(n)
+summary is not O(1)-comparable and needs the same handle treatment. Its one real benefit
+is that host-side inference needs no `ensure_compile_time_eval`, dodging the `lax.scan`
+and `shard_map` caveats below; if that is wanted, **mirror the whole table on host rather
+than summarising**, since per-row min/max is not exact (a row straddling `image_range`
+without intersecting it is indistinguishable from one that does, so it fails
+conservatively — partial support again). A block decomposition
+`(row_boundary, vmin, vmax)` exploiting ICON's renumbering would be O(#blocks) and
+value-typed, restoring cross-mesh program sharing; it needs a measurement of #blocks on a
+real grid and a fix for the straddling gap. Future work.
+
+## Two independent defects, both blocking
+
+Neither is caused by this design; both must be fixed regardless, and the second becomes
+unavoidable once narrowing is the norm.
+
+**NaN gradients from skip values.** `_gather_premap` relies on `-1` wrapping around and
+masks only later in `_make_reduction`, so under `grad` the sentinel gathers a real element
+that flows through the operator's nonlinearities: `grad = [0.25, 0.167, 0.125, nan]`. Fix
+is one `where` sanitising the *index* before the gather — which also removes an existing
+oddity where the domain-start offset shifts `-1` onto a different wrapped element.
+
+**`neighbor_sum` after a narrowing `premap` is already broken — in NumPy too.**
+`_make_reduction` broadcasts the full context table against the narrowed field:
+`operands could not be broadcast together with shapes (4,2) (2,2)`. It must restrict the
+offset definition to the field's domain before masking — a static slice given the Domain,
+so it stays traceable. Related: it masks against the module-level
+`common._DEFAULT_SKIP_VALUE` rather than the connectivity's own `skip_value`.
 
 ## Risks and open questions
 
-- **Distributed is the biggest unknown.** The bounds describe the *global* index space.
-  Under `shard_map` the traced child is a per-rank table, possibly locally renumbered,
-  while bounds and domain stay global. Bounds and table must then be constructed
-  together per rank. This needs designing explicitly, not discovering. Note also that
-  auto-sharding a gather all-gathers the whole operand — `shard_map` is mandatory, and
-  in explicit-sharding mode `lax.gather` has no sharding rule at all, so
-  `_gather_premap` would need an `.at[].get(out_sharding=…)` route.
-- **`as_offset` is an explicit non-goal.** It builds a connectivity from a runtime
-  field, so no eager bounds exist. Under `jit` it must either fail loudly or take a
-  declared output domain.
-- **`ensure_compile_time_eval` is broken under `lax.scan`** in 0.6.2. Only affects the
-  narrowing fallback, but a user wrapping a program in `lax.scan` for time-stepping
-  would hit an opaque error.
-- **The traced connectivity must be installed in the embedded context**, not merely
-  passed to `premap` — `_make_reduction` reads the offset provider from the contextvar.
-  The design silently degrades to closure constants if a caller forgets, so this
-  belongs in the contract for `embedded/context.py`.
-- `restrict()` on a traced table cannot recompute bounds; the constructor must accept
-  their absence.
+- **Mesh replacement retains old tables.** The table is a jit argument, so the caller
+  keeps it alive anyway and aux data adds *zero* incremental retention (a per-rank R2B7
+  decomposition is ~25 MB across ~10 tables, shared by all programs). But old compiled
+  programs pin old tables, and `jax.clear_caches()` does not release them — only dropping
+  the jitted callables does. Matters for ensemble and nested-grid workflows.
+- **`ensure_compile_time_eval` is broken under `lax.scan`** in 0.6.2
+  (`NotImplementedError: Evaluation rule for 'empty' not implemented`). If gt4py programs
+  get wrapped in `lax.scan` for time-stepping this is live, and it is the one concrete
+  argument for the host-mirror variant.
+- **`shard_map` is deferred, not solved.** icon4py runs MPI with per-rank local index
+  spaces and halos (GHEX), not JAX's global-array model; there the handle *is* the
+  rank-local table and the inferred domain is rank-local, which is correct. The aux/child
+  mismatch only arises under `shard_map` over a JAX global array, and that world raises
+  the prior question of what a `Domain` means globally — a larger decision that should not
+  drive connectivity representation. Note `ensure_compile_time_eval` under `shard_map`
+  produces `Manual` HloShardings that reportedly do not work.
+- `restrict()` on a traced table cannot recompute metadata; the constructor must tolerate
+  its absence.
+- The traced connectivity must be **installed in the embedded context**, not merely passed
+  to `premap` — `_make_reduction` reads the offset provider from the contextvar, so the
+  design silently degrades to closure constants if a caller forgets.
 
 ## Sketch of the change
 
-`common.py` — add the value-typed bounds descriptor (consider hanging it off
-`NeighborConnectivityType`, next to `max_neighbors`). Strengthen the `Connectivity`
-contract: `inverse_image` is answerable without inspecting the buffer whenever the
-image range covers the value range. Document that a `Connectivity` may never itself be
-aux data (`__eq__` raises by design).
+`common.py` — document that a `Connectivity` may never itself be aux data (`__eq__` raises
+by design, producing a confusing `ValueError` from `jaxlib`). Optionally hang the bounds
+descriptor off `NeighborConnectivityType`, next to `max_neighbors`.
 
-`nd_array_field.py` — populate the descriptor in `from_array`; split `inverse_image`
-into covering and fallback paths; sanitise skip values in `_gather_premap`; fix
-`_make_reduction`'s skip value; register `JaxArrayConnectivityField` as a pytree node.
+`nd_array_field.py` — add the buffer-keyed handle; register `JaxArrayConnectivityField`
+as a pytree node; route `inverse_image` through the handle; sanitise skip indices in
+`_gather_premap`; restrict the offset definition in `_make_reduction` and use the
+connectivity's own `skip_value`.
 
-The regression test that matters, because it is the property nothing else provides and
-the one that will silently rot: **two different tables of the same shape and bounds
-must produce exactly one trace, and correct results for both.**
+Tests worth pinning: a **narrowing** `premap` under `jit` with the table as an argument
+and nothing in `jaxpr.consts`; `neighbor_sum` after a narrowing `premap` (currently
+failing on NumPy); and `grad` through a gather with skip values producing no NaNs.
 
 ## Related
 
 - [[personal/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]] —
-  overlaps directly on connectivities, offset providers, domain inference and the
-  distributed story; a mesh object owning its connectivities would be the natural home
-  for the bounds descriptor.
+  overlaps directly; a mesh owning its connectivities is the natural home for any
+  precomputed metadata, and owns the local-index-space question deferred above.
 - [[personal/havogt/dependent-local-dimensions|Dependent local dimensions and connectivity chains]] —
-  local dimensions and reductions over them are what consume `premap`'s output.
-- [[personal/havogt/scan-redesign|Redesign of the vertical scan]] — the same
-  static-metadata-versus-traced-data tension, and the same `lax.scan` caveat.
+  local dimensions and reductions consume `premap`'s output.
+- [[personal/havogt/scan-redesign|Redesign of the vertical scan]] — same static-metadata
+  versus traced-data tension, same `lax.scan` caveat.
 - [[personal/havogt/jax-connectivities/jax-connectivities_research|Research appendix]] —
-  measurements, prior-art survey, and JAX-internals citations.
+  measurements, prior-art survey, JAX-internals citations.

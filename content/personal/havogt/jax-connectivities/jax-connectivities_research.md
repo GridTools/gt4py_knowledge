@@ -11,6 +11,44 @@ status: draft
 > jaxlib. Claims are labelled **[M]** measured, **[D]** documented, **[S]** read in
 > source, **[I]** inferred.
 
+## Correction: narrowing is the common case
+
+The first pass of this research assumed *"input fields are allocated over the full
+horizontal range; program `domain=` restrictions apply to the output"*, and on that basis
+recommended a static bounds descriptor. **That premise is wrong** — realistic field
+domains do not cover the connectivity's image, so narrowing is the normal case. The
+bounds descriptor then degrades to eager inference on every real call, which is the
+partial premap support that was explicitly out of scope.
+
+Two objections raised against the handle design were **overstated to wrong**, and the
+corrections are recorded in place below:
+
+- **[M]** Retrace granularity is per **buffer**, not per wrapper object:
+  `1st=1, new-wrapper-same-buffer=1, new-buffer-same-contents=2`. The earlier
+  "reconstructed connectivity retraces" figure came from `jnp.asarray()` minting a fresh
+  buffer, not from wrapper reconstruction. `FieldOffset.as_connectivity_field()` memoizes
+  on `id(offset_definition)` (`fbuiltins.py:496-514`), so gt4py's normal flow reuses
+  buffers — one trace per mesh.
+- **[M]** Cache pinning adds **zero** incremental retention: the table is a jit argument,
+  so the caller keeps it alive regardless. A per-rank ICON R2B7 decomposition is ~25 MB
+  across ~10 tables, shared by all programs. The residual footgun is mesh *replacement* —
+  old programs pin old tables and `jax.clear_caches()` does not release them.
+
+**[M]** Narrowing verified end-to-end on the handle design: field on `Vertex[0:30000)`,
+table 120 000×2 with image over `[0,60000)` → `jaxpr consts: []`, table present as
+`%arg1: tensor<120000x2xi32>`, StableHLO 1.4 kB, output domain narrowed to
+`Edge=(0:60000)`.
+
+**[M]** A further pre-existing defect surfaces once narrowing is normal: `neighbor_sum`
+after a narrowing `premap` fails **on NumPy as well as JAX** —
+`operands could not be broadcast together with shapes (4,2) (2,2)` — because
+`_make_reduction` (`nd_array_field.py:1005-1013`) broadcasts the full context table
+against the narrowed field instead of restricting the offset definition to the field's
+domain first.
+
+The covering-case measurements below remain valid; they simply describe an optimisation
+inside the general path rather than a design.
+
 ## Measured comparison
 
 Field 60 000×f64, table 120 000×2 int32 (0.96 MB):
