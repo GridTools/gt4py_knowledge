@@ -13,6 +13,11 @@ status: draft
 > constructor, and **dimension variables** (`TypeVar`/`TypeVarTuple` over
 > dimensions) so field operators can be generic in their dimensions.
 
+> **Part I has been extracted** into [[shared/dimensions-as-types|Dimensions as
+> types]]. §3 below is now a stub keeping only what Parts II and III refer back
+> to; the requirements, rejected alternatives, migration plan and risks of the
+> base live in the shared document. Parts II and III stay here.
+
 > **Prototypes**: the self-contained static-expressibility prototype (mypy 1.19,
 > no plugin) is vendored alongside this document in
 > [`dimension-generic-fields/`](dimension-generic-fields/) (see §8.A). The
@@ -42,8 +47,8 @@ status: draft
   expressibility, mypy-verified) and the `ts.DimensionVar`/`ts.DimsVar`
   extension of the type system (unit-tested, inert, on the gt4py branch).
 - **Outcome**: a staged design proposal; decisions should be recorded as ADRs
-  once reviewed (suggested: `0024-Dimensions-As-Types.md`,
-  `0025-Dimension-Generic-Operators.md`).
+  once reviewed (suggested: `0027-Dimensions-As-Types.md`,
+  `0028-Dimension-Generic-Operators.md`).
 
 ## 1. Goals
 
@@ -115,42 +120,14 @@ redesign of §3; with today's instance-dimensions it indeed is not.
 
 ## 3. Part I — dimensions as types
 
-### 3.1 Requirements
-
-1. `Field[Dims[I], float64]` must be a valid generic annotation for plain
-   mypy; distinct dimensions must be distinguishable (nominal).
-2. Everything dimension instances do today at the *value* level must keep
-   working on the new dimension objects: `I + 1` / `I - 1` (implicit cartesian
-   offsets), `I(5)` (`NamedIndex`), `I == J` / ordering, `I < 5` etc. (domain
-   construction), dict keys (`domain={I: ...}`, offset providers), `str(I)`,
-   `.value`/`.kind`, pickling.
-3. TypeVars over dimensions must be possible (`TypeVar("D", bound=Dimension)`,
-   `TypeVarTuple`), enabling Part III; `Staggered[I]` must be a type-level
-   function (Part II).
-4. Incremental migration: old-style `Dimension("I")` instances and new-style
-   dimension classes must coexist in one program.
-
-### 3.2 Considered designs
-
-- **(a) Dimension = class, value behavior via metaclass** — **chosen**, §3.3.
-- **(b) Status quo + mypy plugin**: rejected as a *target* (4-dim limit,
-  name-keyed global confusion, no TypeVars, plugin maintenance; the plugin's
-  dtype "blurring" also erases exactly what dtype generics need). The plugin
-  remains as a compatibility shim for old-style dims during migration.
-- **(c) `Dims[Literal["I"], ...]`**: rejected — loses `kind`, stringly-typed,
-  no `Staggered[...]`, unreadable diagnostics.
-- **(d) per-dimension synthesized types via a factory**
-  (`I = dimension("I")`): rejected — a dynamically created class is opaque to
-  static checkers; the *declaration* must be a class statement for mypy to
-  see a nominal type.
-
-### 3.3 Design: `class I(Dimension)` with `DimensionMeta`
-
-Prototype: [`dimension-generic-fields/typed_dimensions.py`](dimension-generic-fields/typed_dimensions.py).
+**Extracted** to [[shared/dimensions-as-types|Dimensions as types]], together
+with its requirements, the rejected alternatives, the migration plan and the
+mypy-plugin removal it enables. Repeated here only insofar as Parts II and III
+below refer back to it:
 
 ```python
 class DimensionBase(metaclass=DimensionMeta):  # root: anything usable in Dims[...]
-    value: ClassVar[str]  # defaults to the class name (__init_subclass__)
+    value: ClassVar[str]
     kind: ClassVar[DimensionKind] = DimensionKind.HORIZONTAL
 
 
@@ -158,55 +135,17 @@ class Dimension(DimensionBase): ...  # base of user-declared dimensions
 
 
 class I(Dimension): ...
-
-
 class K(Dimension, kind=DimensionKind.VERTICAL): ...
 ```
 
-(The two-level root/user split exists for staggering: `Staggered[...]`
-subclasses the root but not `Dimension`, see §4.2.)
-
-- The **class object itself is the value** — there is no instance level;
-  `Dimension.__new__` raises. Wherever today a `Dimension` instance flows
-  (domains, offset providers, `FieldType.dims`, IRs), the class object flows
-  instead.
-- `DimensionMeta` carries the value-level API (`__add__`/`__sub__` building
-  connectivities, `__call__` → `NamedIndex`, comparison operators → `Domain`,
-  `__repr__`) — binary operators on a class object dispatch through its
-  metaclass, so this is the only place they can live.
-- **Name-based `__eq__`/`__hash__` on the metaclass** reproduces today's
-  `Dimension.__eq__` (compares `.value` only) and makes new-style classes
-  compare/hash equal to old-style instances of the same name. This is the
-  migration mechanism: `Domain` dicts, offset-provider lookups and
-  `FieldType.dims` comparisons work across both styles, so subsystems (and
-  downstream code like icon4py) can migrate dimension-by-dimension.
-- **mypy quirk (important, prototype-verified)**: mypy rejects generic
-  self-types on metaclass methods at the *definition site* ("Self argument
-  missing for a non-static method") but applies them correctly at every
-  *call site*. The metaclass operator overloads therefore carry
-  `# type: ignore[misc]` on their signatures; `static_checks.py` pins the
-  call-site behavior so a mypy upgrade that changes this is caught
-  immediately. (If this ever regresses, the fallback is free functions
-  `shift(I, 1)` / `half(I)` with identical overload structure — only the
-  notation, not the design, depends on the quirk.)
-
-Migration sketch (each step landable separately):
-
-1. Land `DimensionMeta`/class-style `Dimension` in `common` with name-based
-   interop; keep `Dimension("I")` working (factory returning an old-style
-   instance, later a synthesized class).
-2. Move GT4Py-internal dimension definitions (tests, docs, fbuiltins) to
-   class style; add `typing_tests` coverage; drop the `_DimA`–`_DimD` and
-   `fixup_dims_*` machinery from the mypy plugin for class-style dims.
-3. Deprecate instance-style definitions; eventually `Dimension("I")` emits a
-   warning.
-
-Open points: eve serialization of dimension *classes* inside IR nodes
-(currently dataclass instances serialize structurally; classes need a
-`value`/`kind`-based representation — straightforward since both are class
-attributes), and `typing` internals caching subscriptions by
-hash-equal-but-distinct dims (only relevant for same-named distinct dims,
-which we reject anyway).
+- The **class object is the value**, and `DimensionMeta` carries the value-level
+  API (`__add__`/`__sub__`, `__call__` → `NamedIndex`, comparisons → `Domain`) —
+  which is where the staggering overloads of §4.2 attach.
+- The **two-level root/user split** is the extension point Parts II and III use:
+  `Staggered[...]` (§4.2) subclasses `DimensionBase` but not `Dimension`, and
+  every generic dimension TypeVar (§5.1) is bound to the root.
+- Dimensions are **nominal**, which is what lets the overload *argument matching*
+  of §4.1 discriminate positions at all.
 
 ## 4. Part II — statically typed staggering
 
@@ -715,9 +654,9 @@ produces them, mypy-clean, all existing tests pass):
 Stages 0–2 of the dtype plan are prerequisites for the *frontend* stages here
 (the binding utilities are shared); Part I/II stages are independent of dtype.
 
-1. **Stage D0 — dimensions as types in `common`** (Part I): class-style
-   `Dimension` + metaclass + interop equality, legacy factory, typing_tests;
-   ADR `0024`.
+1. **Stage D0 — dimensions as types in `common`** (Part I): specified in
+   [[shared/dimensions-as-types|Dimensions as types]]; prerequisite for every
+   stage below.
 2. **Stage D1 — typed shifts & staggering, static side** (Part II):
    `Staggered`, typed `Connectivity`, generated `Field.__call__` overloads;
    remove the dims hack from the mypy plugin for class-style dims.
@@ -735,7 +674,8 @@ Stages 0–2 of the dtype plan are prerequisites for the *frontend* stages here
 
 ## 10. Risks and open questions
 
-1. **The metaclass-overload mypy quirk** (§3.3): call-site behavior is
+1. **The metaclass-overload mypy quirk** (see
+   [[shared/dimensions-as-types|Dimensions as types]]): call-site behavior is
    correct but the def-site suppression could break on a mypy upgrade;
    pinned by tests, with a notation-only fallback. **pyright is untested** —
    must be checked before committing to the `I + 1/2` notation (the
@@ -745,10 +685,8 @@ Stages 0–2 of the dtype plan are prerequisites for the *frontend* stages here
 3. **Overload-set size vs. checker performance**: N(N+1)/2 overloads per
    substitution operation is small (≤ 15), but `Field` has many operators;
    measure mypy runtime on a large downstream consumer before generalizing.
-4. **Migration surface of Part I** is the largest cost item: every IR node
-   embedding `common.Dimension`, eve serialization of class objects, and
-   downstream user code. The name-based-equality interop bounds the risk but
-   needs a dedicated test layer (mixed old/new dims in one program).
+4. **Migration surface of Part I** is the largest cost item overall; it is
+   tracked in [[shared/dimensions-as-types|Dimensions as types]], not here.
 5. **Canonical dims ordering with variables**: `Dims[D, K]` assumes the
    binding of `D` sorts before `K`; substitution re-validates, so a "wrongly
    ordered" binding today raises a validator error — decide whether to
