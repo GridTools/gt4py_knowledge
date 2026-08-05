@@ -214,8 +214,10 @@ the caller and the one that actually needs a weight has to name it.
 
 #### Surface
 
+One rule for everything ambient: **the declaration is the key**.
+
 ```python
-mesh = gtx.Namespace("mesh")        # connectivities
+V2E = gtx.FieldOffset("V2E", source=Edge, target=(Vertex, V2EDim))
 dx = gtx.Static[float]              # a value, folded into the generated code
 nu = gtx.Extern[float]              # a value, passed at runtime
 
@@ -225,8 +227,29 @@ def delta_x(f: IJField) -> IJField:
     return (1.0 / dx) * (f(I + 1) - f)     # never a parameter
 
 
-prog(f, out, bind={mesh: my_mesh, dx: 0.5})   # or: with gtx.bind(dx, 0.5): ...
+prog(f, out, bind={V2E: connectivity, dx: 0.5})   # or: with gtx.bind(dx, 0.5): ...
 ```
+
+A `FieldOffset` is *already* a declaration — it names the offset and fixes its
+source and target — so it binds exactly like a value, and a program called
+without an `offset_provider` assembles one from the bound offsets. A container
+may declare what it supplies, with the class attribute holding the declaration
+and the instance attribute the value:
+
+```python
+class Mesh:
+    V2E = V2E              # this mesh supplies the V2E connectivity
+    dx = physics.dx
+
+
+prog(f, out, bind=Mesh(...))
+```
+
+Binding by declaration *identity* rather than by attribute name is what lets a
+container supply the very offset an operator refers to, rather than one that
+merely shares its name — and it means a container attribute need not be named
+after the declaration at all (*measured*: an attribute called `spacing` resolves
+`physics.dx` correctly, across modules).
 
 `bind=` is sugar over the `ContextVar`, scoped to one call, so the two spellings
 compose rather than compete.
@@ -263,6 +286,32 @@ fold suffices); threading the parameter into operator signatures and call sites
 and both gtfn and dace codegen fine that way); and a per-operator inspection pass
 (`transform_utils._get_closure_vars_recursively` already collects declarations
 transitively through nested operators).
+
+#### Transition: retiring the second binding rule
+
+The prototype first grew *two* binding mechanisms with different identity rules:
+connectivities were harvested from a bound object by attribute **name** (a
+`Namespace`), values were keyed by declaration **identity**. Same surface, two
+rules — and the name-based half needed a collision check, because two namespaces
+could each offer an offset called `V2E`.
+
+Unifying on declarations removes `Namespace`, the attribute harvesting and that
+collision check outright, and it is worth doing in two steps:
+
+1. **Move only the binding surface.** Offsets bind by declaration; the
+   `offset_provider` is still assembled from the bound ones and passed exactly as
+   today, so the frontend, the IR and the backends are untouched. *This step is
+   implemented.*
+2. **Then consider making connectivities ordinary ambient values**, i.e. an
+   `Extern[Connectivity]` that becomes a synthesised parameter like any other,
+   at which point `offset_provider` stops being a separate concept. This is not
+   obviously right and should not be assumed: `offset_provider` carries things
+   the parameter path does not model today (its *type* drives domain inference
+   and connectivity typing, and `arguments.py` still notes the temporary pass
+   needs the runtime object). Worth a separate look rather than a follow-through.
+
+The staging matters because step 1 is a pure surface change with no risk to the
+toolchain, while step 2 touches how connectivities are typed and inferred.
 
 #### Binding time
 
