@@ -201,39 +201,95 @@ binds later: a user declares a value once, globally, and any field operator
 reaches it without it appearing in a signature — a `ContextVar` filled at
 program-execution time (JIT time for compiled backends).
 
+> **Prototyped**: gt4py branch
+> [`ambient-offset-provider`](https://github.com/havogt/gt4py/pull/71) (fork PR).
+> Everything below marked *measured* comes from there; everything marked *open*
+> is still open.
+
 The motivating case is mesh properties. They are scalars on a Cartesian grid
 (`dx`, `dy`) and fields on an unstructured one (connectivities plus their
-weights); both are fixed for the lifetime of the application, and both must
-today be carried explicitly — as extra operator parameters, or as the
-`offset_provider` threaded down the call chain. Every operator between the
-caller and the one that actually needs a weight has to name it.
+weights); both must today be carried explicitly — as extra operator parameters,
+or as the `offset_provider` threaded down the call chain. Every operator between
+the caller and the one that actually needs a weight has to name it.
 
-Most of the machinery exists, so this is more unification than invention:
+#### Surface
 
-- **`ContextVar`s are already how gt4py carries such values.**
-  `next/embedded/context.py` holds `_offset_provider` and
-  `_closure_column_range`, with an `update()` context manager and
-  `get_offset_provider()` — internal and embedded-only today.
-- **The scalar case already works**, but only through a namespace object:
-  `ConstantPythonNamespaceObject = eve_utils.FrozenNamespace | enum.EnumMeta`
-  (`type_translation.py`), folded in `closure_var_folding.py`, fingerprint-aware
-  in `fingerprinting.py`.
-- **The field case is the stretch goal above**: hidden parameter via
-  `__gt_implicit_args__()`, and *bind the binding, not the buffer*, so only the
-  type/domain descriptor enters the compiled cache key.
+```python
+mesh = gtx.Namespace("mesh")        # connectivities
+dx = gtx.Static[float]              # a value, folded into the generated code
+nu = gtx.Extern[float]              # a value, passed at runtime
 
-What late binding adds over the decoration-time variant is that the same
-operators can run against a *different* mesh in one process; the decoration-time
-form fixes the value before any operator is defined.
 
-Open questions: what "static for the lifetime of the application" means
-operationally (per process, per `ContextVar` scope, or per compiled program —
-and what happens on rebinding: recompile, reject, or re-bind an argument
-descriptor); which part of an ambient field enters the fingerprint; how an
-ambient declaration is typed, and whether an operator's type should reflect its
-ambient dependencies at all; and the standard objection to dynamic scoping —
-errors when nothing is bound must be good, and there must be a way to see what
-an operator depends on ambiently.
+@gtx.field_operator
+def delta_x(f: IJField) -> IJField:
+    return (1.0 / dx) * (f(I + 1) - f)     # never a parameter
+
+
+prog(f, out, bind={mesh: my_mesh, dx: 0.5})   # or: with gtx.bind(dx, 0.5): ...
+```
+
+`bind=` is sugar over the `ContextVar`, scoped to one call, so the two spellings
+compose rather than compete.
+
+#### How it works
+
+- **A declaration carries its type.** `Static[float]` implements `__gt_type__`,
+  and `type_translation.from_value` already dispatches on that — so an operator
+  referring to an ambient value type-checks when it is *defined*, with nothing
+  bound. **No type-system change was needed.** An untyped placeholder fails with
+  `DSLTypeError: Unexpected object ...`, and the failure is temporal, not
+  spatial: it happens in the same file, so putting the declaration in another
+  module changes nothing.
+- **The reference becomes a synthesised program parameter**, added once in
+  `func_to_past`. From there it travels the ordinary path: type checking,
+  lowering, `static_params` and the compiled-program key all treat it as an
+  argument, and only the value is supplied per call.
+- **The two forms differ in one place only** — whether that parameter is listed
+  as static. `Extern[T]` stays a runtime argument; `Static[T]` is a static
+  argument, so the *existing* fold in `past_to_itir` bakes it in and the
+  *existing* `StaticArg` key specialises on it. *Measured* on gtfn and dace with
+  two values: `Static` compiles 2 variants, `Extern` 1, both correct.
+- **Connectivities identify by content, not by `id`.** `gtx.freeze(conn)` caches
+  a content hash once; `hash_offset_provider_items_by_id` prefers it. *Measured*:
+  3 compiled variants drop to 2 when two structurally identical meshes stop
+  being keyed apart by object identity — that function's own docstring warns it
+  "could generate different hashes for two offset providers that are
+  semantically equal".
+
+Three things it turned out **not** to need, each of which was assumed at some
+point in the design: a new FOAST specialization step (the existing static-argument
+fold suffices); threading the parameter into operator signatures and call sites
+(a free symbol in a lowered operator resolves against the *program's* parameters,
+and both gtfn and dace codegen fine that way); and a per-operator inspection pass
+(`transform_utils._get_closure_vars_recursively` already collects declarations
+transitively through nested operators).
+
+#### Binding time
+
+"Static for the lifetime of the application" is the wrong unit; the useful one is
+**static for a jitted program**. That makes the two forms a declaration-site
+choice of what identifies a value in the jit key: `Static[T]` puts the *value*
+there, `Extern[T]` only its type. Which also dissolves an apparent conflict with
+[[personal/havogt/jax-connectivities/jax-connectivities|the JAX connectivities proposal]] — a
+connectivity wants descriptor-identity (one program per mesh *class*), a scalar
+wants value-identity, and nothing forces one policy on both.
+
+#### Open
+
+- **Canonical identifiers.** Synthesised parameters currently take the closure
+  variable's *local* name, so two operators naming the same declaration
+  differently, or two modules that both use `dx`, collide. Declarations should be
+  named explicitly (`Static[float]("dx")`) with a FOAST rename pass; a generated
+  counter will not do, since the name lands in the compiled signature and would
+  shift with import order.
+- **Ambient fields** (`mesh.edge_length`) are not implemented, but now look like
+  an `Extern[Field[...]]` — a synthesised parameter with no folding, i.e. the
+  read-only-field stretch goal above with a later binding time.
+- **Immutability.** `freeze(readonly=True)` would make the cached content hash
+  trustworthy, but the gtfn bindings are generated with mutable `ndarray`
+  parameters and reject a read-only array outright, so it is off by default.
+- **Debuggability**, unchanged: errors when nothing is bound must be good, and
+  there should be a way to see what an operator depends on ambiently.
 
 The ceiling this aims at is a mesh concept built on top, where connectivities
 and weights are properties of an ambient mesh rather than arguments — see
