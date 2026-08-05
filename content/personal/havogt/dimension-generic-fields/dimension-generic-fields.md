@@ -9,11 +9,11 @@ status: draft
 > **TL;DR** Redesign `Dimension` so that concrete dimensions are *types*
 > (`class I(gtx.Dimension)`), usable directly in static type checking without a
 > mypy plugin. On top of that: statically typed **staggering**
-> (`b: Field[Dims[Staggered[I]]] = a(I + 1/2)`) via a `Staggered[D]` type
+> (`b: Field[Dims[Staggered[I]]] = a(Staggered[I] + 1/2)`) via a `Staggered[D]` type
 > constructor, and **dimension variables** (`TypeVar`/`TypeVarTuple` over
 > dimensions) so field operators can be generic in their dimensions.
 
-> **Prototypes**: the self-contained static-expressibility prototype (mypy 1.19,
+> **Prototypes**: the self-contained static-expressibility prototype (mypy 2.3,
 > no plugin) is vendored alongside this document in
 > [`dimension-generic-fields/`](dimension-generic-fields/) (see §8.A). The
 > type-system extension (`ts.DimensionVar`/`ts.DimsVar`, real `src/` changes plus
@@ -34,7 +34,7 @@ status: draft
   ([[personal/havogt/dtype-generic-fields|dtype-generic fields]]) to **dimensions**:
   (I) redesigning `Dimension` so concrete dimensions are *types* usable in
   static type checking, (II) statically typed **staggering**
-  (`b: Field[Dims[Staggered[I]]] = a(I + 1/2)`), and (III) dimension
+  (`b: Field[Dims[Staggered[I]]] = a(Staggered[I] + 1/2)`), and (III) dimension
   *variables* (dim-generic operators) in the DSL type system.
 - **Prototypes**: the critical pieces are implemented and tested — see §8 for
   what exactly is proven by the vendored
@@ -60,8 +60,8 @@ class K(gtx.Dimension, kind=gtx.DimensionKind.VERTICAL): ...
 
 
 a: gtx.Field[gtx.Dims[I], gtx.float64]
-b: gtx.Field[gtx.Dims[gtx.Staggered[I]], gtx.float64] = a(I + 1 / 2)  # (II) staggering
-c: gtx.Field[gtx.Dims[I], gtx.float64] = b(gtx.Staggered[I] + 1 / 2)
+b: gtx.Field[gtx.Dims[gtx.Staggered[I]], gtx.float64] = a(gtx.Staggered[I] + 1 / 2)  # (II)
+c: gtx.Field[gtx.Dims[I], gtx.float64] = b(I + 1 / 2)
 
 T = TypeVar("T", gtx.float32, gtx.float64)
 Ds = TypeVarTuple("Ds")
@@ -212,7 +212,7 @@ which we reject anyway).
 
 ### 4.1 Why it was "not expressible", and what changed
 
-A shift `a(I + 1/2)` maps `Field[Dims[..., I, ...]]` to
+A shift `a(Staggered[I] + 1/2)` maps `Field[Dims[..., I, ...]]` to
 `Field[Dims[..., Istag, ...]]` — a **type-level substitution inside a
 variadic tuple**. Python typing has no type-level `Map`/`Replace` over a
 `TypeVarTuple`, and a tuple type may contain at most one unpacked
@@ -251,6 +251,34 @@ unstructured remaps) statically typed, not just staggering.
 
 ### 4.2 `Staggered[D]`: the dual grid as a type constructor
 
+**Convention: a shift is precomposition.** A field is a map `f: I → value` and a
+connectivity is a map `φ: D → I`; applying one is `f ∘ φ`, a field on `D`. The
+connectivity's domain is therefore the *result's* dimension and its codomain the
+field's — forced by composition, not chosen. Concretely, the index expression in
+`f(...)` is written in the result's index space and must *evaluate* to an index
+of the field's own dimension: for `a: Field[Dims[I]]`, `a(Staggered[I] + 1/2)`
+is `p ↦ a[p + ½]` with `p` on `Staggered[I]`, so it lands on `Staggered[I]`.
+
+This is the rule gt4py already follows everywhere else; the unstructured
+connectivities encode it in their very names. `V2E` means "for each Vertex, its
+Edges" — domain `Vertex`, codomain `Edge` — so it consumes an edge field and
+produces a vertex field. Staggering is merely the first place the convention
+becomes *observable*, because integer Cartesian shifts have domain == codomain.
+Correspondingly, staggered point `i` sits at position `i - 1/2` (ADR 0026):
+`Staggered[I](0)` is the point just *below* `I(0)`.
+
+**Discarded: source-naming.** The alternative — name the dimension the field is
+*on*, `a(I + 1/2)` for `a` on `I` — reads more naturally under the "roll the
+data along its own axis" intuition, and it would remove the `dual(dim)` call
+from every dual-generic body below (the operator has its own dimension in hand;
+under precomposition it must name the dual of it). It was rejected because it
+gives no rule for the unstructured case: `a(E2C[0])` cannot name the field's
+dimension, so unstructured shifts would have to become the exception. The
+apparent third argument — that `u_{i+½}` in the literature *is* source-naming —
+does not survive: the subscript denotes a value at a location, and reading the
+same formula as a field definition, `b_j = a_{j+½}`, makes the free index `j`
+the result's. Only that reading composes.
+
 ```python
 class Staggered(Dimension, Generic[D]):
     base: ClassVar[type[Dimension]]
@@ -262,8 +290,8 @@ class Staggered(Dimension, Generic[D]):
   `Ihalf: TypeAlias = Staggered[I]`.
 - **Staggering is an involution**, encoded in overload pairs on
   `DimensionMeta.__add__` (the `Staggered[D]` overload *before* the generic
-  `D` overload, so `Staggered[I] + 1/2` yields `Connectivity[I, Staggered[I]]`
-  and `Staggered[Staggered[I]]` never arises; constructing it explicitly
+  `D` overload, so a shift naming a staggered dimension consumes an unstaggered
+  field and `Staggered[Staggered[I]]` never arises; constructing it explicitly
   raises):
 
 ```python
@@ -272,9 +300,9 @@ def __add__(cls: type[Staggered[D]], offset: int) -> Connectivity[Staggered[D], 
 @overload
 def __add__(cls: type[D], offset: int) -> Connectivity[D, D]: ...
 @overload
-def __add__(cls: type[Staggered[D]], offset: float) -> Connectivity[D, Staggered[D]]: ...
+def __add__(cls: type[Staggered[D]], offset: float) -> Connectivity[Staggered[D], D]: ...
 @overload
-def __add__(cls: type[D], offset: float) -> Connectivity[Staggered[D], D]: ...
+def __add__(cls: type[D], offset: float) -> Connectivity[D, Staggered[D]]: ...
 ```
 
 - **Doubly staggered types are unrepresentable.** The hierarchy has two
@@ -294,10 +322,13 @@ def __add__(cls: type[D], offset: float) -> Connectivity[Staggered[D], D]: ...
   nominal types. Making the type unrepresentable sidesteps the equation
   entirely: the only fixed points are `D` and `Staggered[D]`, matching the
   physics (there are exactly two grids per dimension).
-- The notation is exactly the desired `a(I + 1/2)`: `1/2` is a `float`, and
+- The notation is the desired `a(Staggered[I] + 1/2)`: `1/2` is a `float`, and
   `int` vs `float` is statically distinguishable. **Caveat**: float *values*
-  are not (no `Literal` for floats), so `I + 0.7` statically claims to be a
-  staggering shift and is only rejected at runtime (`ValueError`). If this is
+  are not (no `Literal` for floats), so `Staggered[I] + 0.7` statically claims
+  to be a staggering shift. This is a **mypy-only** gap, not a runtime-only
+  rejection: the DSL already refuses it at FOAST time with a proper `DSLError`
+  and a hint (`type_deduction.py`, `offset_index % 1 not in (0, 0.5)`); only the
+  static layer and direct embedded use fall back to a runtime `ValueError`. If this is
   considered too weak, a dedicated `HALF` singleton type
   (`I + HALF`, `I - HALF + 1`) restores full static soundness at the cost of
   the literal notation; both can coexist.
@@ -319,9 +350,15 @@ def __add__(cls: type[D], offset: float) -> Connectivity[Staggered[D], D]: ...
   @overload
   def avg(f: Field[Dims[D], float]) -> Field[Dims[Staggered[D]], float]: ...
   def avg(f):
-      (dim,) = f.dims
-      return f(dim - 1 / 2) + f(dim + 1 / 2)
+      to = dual(f.dims[0])  # a shift names the result grid: the dual of the field's
+      return f(to - 1 / 2) + f(to + 1 / 2)
   ```
+
+  This is where precomposition costs something: the body cannot shift on its
+  own dimension and needs `dual(dim)` — the typed counterpart of gt4py's
+  value-level `flip_staggered`. The prototype gives `dual` the same overload
+  pair, so it stays precise under a dimension variable (`to_staggered` in
+  `static_checks.py`).
 
   The overload pair does **not** have to be user-written, though: a `Dual[X]`
   marker type plus a decorator whose argument type *recognizes* dual-generic
@@ -364,20 +401,23 @@ def __add__(cls: type[D], offset: float) -> Connectivity[Staggered[D], D]: ...
 
 ### 4.3 Semantics (value level)
 
-Convention: staggered point `i` of `Staggered[I]` sits at position `i + 1/2`
-of `I`. `b = a(conn)` means `b[p] = a[p + conn.offset]` in *position* space;
-in index space this is a shift by `ceil(offset)` reading from an unstaggered
-and `floor(offset)` reading from a staggered dimension. Useful identities
-(all covered by runtime tests in the prototype):
+Staggered point `i` sits at position `i - 1/2`, so the point of `a(conn)` at
+index `p` reads `a` at position `pos(p) + frac(offset)`. In index space that is
+a shift by `ceil(offset)` when the shift names an **unstaggered** dimension and
+`floor(offset)` when it names a **staggered** one — keyed on the dimension the
+result lives on. This is what `connectivity_for_cartesian_shift` already
+implements (`divmod`, plus a `+1` correction exactly when the named dimension is
+unstaggered). Useful identities for `a` on `I` (all covered by runtime tests in
+the prototype):
 
-- `a(I + 1/2)(Staggered[I] + 1/2) == a(I + 1)` — two half shifts = one full.
-- `a(I + 1/2)(Staggered[I] - 1/2) == a` — round trip.
-- `a(I + 1/2) - a(I - 1/2)` — C-grid finite difference, lives on
-  `Staggered[I]`.
+- `a(Staggered[I] + 1/2)(I + 1/2) == a(I + 1)` — two half shifts = one full.
+- `a(Staggered[I] + 1/2)(I - 1/2) == a` — round trip.
+- `a(Staggered[I] + 1/2) - a(Staggered[I] - 1/2)` — C-grid finite difference,
+  lives on `Staggered[I]`.
 
-`a(I + 1/2)` is *pure relabeling + translation* (no interpolation);
+A staggering shift is *pure relabeling + translation* (no interpolation);
 averaging is written explicitly, e.g.
-`0.5 * (u(I + 1/2) + u(I - 1/2))`. Domain handling on bounded (non-periodic)
+`0.5 * (u(Staggered[I] + 1/2) + u(Staggered[I] - 1/2))`. Domain handling on bounded (non-periodic)
 domains follows the same position arithmetic (result range =
 `{i : i + offset ∈ range(a)}`, i.e. half-open ranges shrink/shift by
 ceil/floor); the prototype sidesteps this with periodic `np.roll`, the real
@@ -392,14 +432,25 @@ concrete typing handles it:
 
 - **FOAST**: `visit_BinOp` on `dimension ± literal` (today
   `type_deduction.py:604`, integers only) gains the fractional case,
-  producing `ts.OffsetType(source=I, target=(Staggered[I],))` resp.
-  `(source=Staggered[I], target=(I,))`. `return_type_field` already performs
-  the dims substitution for arbitrary source/target. The lowering of the
-  offset value keeps the integral part as today's cartesian offset; the grid
-  change is encoded in the (auto-registered) relocation offset provider, so
-  GTIR and the backends only ever see ordinary dimensions (e.g. `I½`) and
-  integer shifts — **backends are unaffected**.
-- **Embedded**: `I + 1/2` constructs the relocation+translation
+  producing `ts.OffsetType(source=Staggered[I], target=(I,))` for `I ± 1/2`
+  resp. `(source=I, target=(Staggered[I],))` for `Staggered[I] ± 1/2` — i.e.
+  `source=conn.codomain, target=(conn.domain_dim,)`, exactly as the shipped
+  code already does. `return_type_field` already performs the dims substitution
+  for arbitrary source/target. The lowering of the offset value keeps the
+  integral part as today's cartesian offset; the grid change is encoded in the
+  (auto-registered) relocation offset provider, so GTIR sees only ordinary
+  dimensions (e.g. `I½`) and integer shifts. **Backends are not entirely
+  unaffected**, though: gtfn needed `_add_staggered_aliases`
+  (`itir_to_gtfn_ir.py`), emitting the staggered tag as a C++ `using` alias of
+  its base tag, because a gtfn shift can offset a SID but cannot *rename* its
+  axis — so base and staggered must collapse into one axis for the relocation to
+  become a plain offset. That is the concrete reason a staggering shift has to
+  stay expressible as integer offset + relabel.
+- **A dimension and its staggered counterpart may not co-occur** in one field or
+  domain (`check_dims`, `common.py`). mypy cannot express that constraint, so
+  `Field[Dims[I, Staggered[I]]]` stays statically writable and the check remains
+  a runtime one — a known gap, not a solved case.
+- **Embedded**: `Staggered[I] + 1/2` constructs the relocation+translation
   `CartesianConnectivity`, which `premap` supports today.
 - The `Field`/`Connectivity` overloads of §4.1/4.2 live in `common.py` (or a
   generated `.pyi`) and replace the current untyped
@@ -612,7 +663,8 @@ all remaining named axes), `tag` the result.
   fails the runtime tick-equality check. Part II promotes exactly this
   metadata bit to a type (`Staggered[I]`, `Dual[X]`), making the same
   mistake a static + decoration-time error and giving shifts a *type-level*
-  effect (`a(I + 1/2)` changing the dims type has no coordax analogue).
+  effect (`a(Staggered[I] + 1/2)` changing the dims type has no coordax
+  analogue).
 
 **How coordax could fit.** Not as a dependency — gt4py's `Field`/`Domain`
 already cover its runtime role — but three concrete touchpoints:
@@ -680,7 +732,7 @@ add ergonomics, not power:
 (self-contained, vendored next to this document; run with
 `pytest content/personal/havogt/dimension-generic-fields/` and
 `mypy --config-file content/personal/havogt/dimension-generic-fields/mypy.ini ...`;
-mypy 1.19 without any plugin):
+mypy 2.3 without any plugin):
 
 - `typed_dimensions.py`: `DimensionMeta`/`Dimension`/`Staggered`/
   `Connectivity`/`Field` exactly as in §3–4 (~150 lines of typing surface).
@@ -736,9 +788,11 @@ Stages 0–2 of the dtype plan are prerequisites for the *frontend* stages here
 ## 10. Risks and open questions
 
 1. **The metaclass-overload mypy quirk** (§3.3): call-site behavior is
-   correct but the def-site suppression could break on a mypy upgrade;
-   pinned by tests, with a notation-only fallback. **pyright is untested** —
-   must be checked before committing to the `I + 1/2` notation (the
+   correct but the def-site suppression could break on a mypy upgrade; pinned
+   by tests, with a notation-only fallback. Re-verified on **mypy 2.3**
+   (2026-08-05) — the quirk and the suppression both still behave as described,
+   so the upgrade risk has not materialised so far. **pyright is untested** —
+   must be checked before committing to the `Staggered[I] + 1/2` notation (the
    fallback functions are checker-agnostic).
 2. **Float-literal staggering offsets** are value-checked only at runtime
    (`I + 0.7`); decide literal notation vs. `HALF` token (§4.2) in the ADR.
