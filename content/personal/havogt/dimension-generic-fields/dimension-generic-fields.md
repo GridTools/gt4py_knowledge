@@ -405,7 +405,64 @@ concrete typing handles it:
   generated `.pyi`) and replace the current untyped
   `__call__(...) -> Field` / plugin-blurred annotations.
 
-## 5. Part III — dimension variables in the DSL type system
+### 4.5 Evidence: staggering *without* Part III is a regression
+
+§4.4 is right that staggering needs no genericity to be *typed*. But typing it is
+not the same as using it, and measuring a real kernel shows staggering alone makes
+the code worse, not better.
+
+Measured 2026-08-05 against gt4py v1.2.0, using the staggered-dimension feature as
+merged (`feat[next]: staggered fields`, #2667) — so this is the shipped semantics,
+not the `Staggered[D]` spelling proposed in §4.2.
+
+The shallow water model (NCAR/SWM, an Arakawa C-grid kernel) applies four
+operations — `avg_x`, `avg_y`, `delta_x`, `delta_y` — across fields at four grid
+locations: cell centres `p`, `h`; x-faces `u`, `cu`; y-faces `v`, `cv`; corners `z`.
+Today it needs **8 operators**, four of them distinguished only by a `_staggered`
+name suffix and a flipped `±1` shift, with correctness resting on the author
+calling the right one.
+
+Rewriting with staggered dimensions requires **14**, because a field operator is
+concrete in *every* dimension, not just the one being shifted. `avg_x` is applied to
+`p` on `(I, J)` and to `cv` on `(I, JHalf)`; one operator cannot serve both:
+
+```
+avg_x(p  : (I, J)     ) -> accepted
+avg_x(cv : (I, JHalf) ) -> ValueError: Incompatible 'Domain' in assignment
+```
+
+Enumerating every distinct signature the timestep actually uses:
+
+| operation | required signatures | n |
+| --- | --- | --- |
+| `avg_x` | `(I,J)→(I½,J)`, `(I,J½)→(I½,J½)`, `(I½,J)→(I,J)`, `(I½,J½)→(I,J½)` | 4 |
+| `avg_y` | `(I,J)→(I,J½)`, `(I½,J)→(I½,J½)`, `(I,J½)→(I,J)`, `(I½,J½)→(I½,J)` | 4 |
+| `delta_x` | `(I,J)→(I½,J)`, `(I,J½)→(I½,J½)`, `(I½,J)→(I,J)` | 3 |
+| `delta_y` | `(I,J)→(I,J½)`, `(I½,J)→(I½,J½)`, `(I,J½)→(I,J)` | 3 |
+
+With the dimension variables of §5.1 the same four operations are **4** operators,
+each generic in the dimensions it does not touch:
+
+```python
+def avg_x(f: Field[Dims[I, Unpack[Ds]], T]) -> Field[Dims[Staggered[I], Unpack[Ds]], T]: ...
+```
+
+So the progression is **4 generic / 8 by convention today / 14 with staggering
+alone**. The type-safety argument also weakens at 14: fourteen near-identical
+three-line bodies differing only in dimension annotations invite exactly the
+copy-paste error the types were meant to catch.
+
+§9 already has this ordering right: **D4** (staggering, value path) sits after
+**D3** (dim-generic operators), so a user following the plan never meets staggering
+without `Ds`. The measurement above is what that ordering is protecting against, and
+it argues the two must not be decoupled — D4 pulled ahead of D3 is a net loss on
+real kernels, not merely an incomplete feature.
+
+Worth noting that gt4py **has already shipped the value path** (#2667) while D3 does
+not exist. The staggered dimensions available today are therefore in exactly the
+premature state this section measures: usable, correct, and — on a C-grid kernel —
+worse than the `_staggered`-suffix convention they replace. That is an argument for
+prioritising `Ds`, not for withdrawing staggering.
 
 ### 5.1 Spelling
 
