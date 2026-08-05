@@ -28,7 +28,7 @@ class K(Dimension, kind=DimensionKind.VERTICAL): ...
 
 
 def staggered_is_not_unstaggered(a: Field[Dims[I], float]) -> None:
-    b: Field[Dims[I], float] = a(I + 1 / 2)  # EXPECT-ERROR: result lives on Staggered[I]
+    b: Field[Dims[I], float] = a(Staggered[I] + 1 / 2)  # EXPECT-ERROR: result lives on Staggered[I]
     c: Field[Dims[Staggered[I]], float] = a(I + 1)  # EXPECT-ERROR: result lives on I
     del b, c
 
@@ -53,8 +53,8 @@ def wrong_dimension_kind(k: Field[Dims[K], float]) -> None:
 
 
 def roundtrip_must_go_through_the_dual(a: Field[Dims[I], float]) -> None:
-    b = a(I + 1 / 2)
-    b(I + 1 / 2)  # EXPECT-ERROR: b has no unstaggered I dimension anymore
+    b = a(Staggered[I] + 1 / 2)
+    b(Staggered[I] + 1 / 2)  # EXPECT-ERROR: b is already on the staggered grid
 
 
 def doubly_staggered_dimensions_are_unrepresentable(

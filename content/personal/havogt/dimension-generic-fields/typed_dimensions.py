@@ -20,10 +20,12 @@ see ``static_checks.py`` / ``static_errors.py`` / ``test_typed_dimensions.py``):
    the same value-level behavior dimension *instances* have today
    (``I + 1`` builds a connectivity, ``str(I)``, equality by name, ...).
 3. **Staggering as a type-level function**: ``Staggered[I]`` is the dual
-   (staggered) counterpart of ``I``. ``I + 1/2`` is typed
-   ``Connectivity[Staggered[I], I]`` and ``Staggered[I] + 1/2`` is typed
-   ``Connectivity[I, Staggered[I]]`` — the dual-grid involution is encoded in a
-   pair of overloads, so no doubly-staggered types ever arise.
+   (staggered) counterpart of ``I``. A shift names the dimension the *result*
+   lives on, so ``Staggered[I] + 1/2`` is typed
+   ``Connectivity[Staggered[I], I]`` (applied to a field on ``I``) and
+   ``I + 1/2`` is typed ``Connectivity[I, Staggered[I]]`` — the dual-grid
+   involution is encoded in a pair of overloads, so no doubly-staggered types
+   ever arise.
 4. **Shift typing as positional substitution**: ``field(conn)`` replaces exactly
    the matching dimension in the field's ``Dims[...]``, expressed with
    rank-bounded overloads (rank <= 3 here; generated code can extend this).
@@ -98,9 +100,17 @@ class DimensionMeta(type):
     # The fractional-offset overloads encode staggering:
     # - integer offsets stay on the same grid,
     # - half-integral offsets move to the dual grid.
+    #
+    # A shift is precomposition: for `f: I -> value` and `phi: D -> I`, applying
+    # `phi` yields `f . phi`, a field on `D`. So a connectivity's domain is the
+    # *result's* dimension and its codomain the field's, and the index
+    # expression is written in the result's index space while evaluating to an
+    # index of the field's. Hence `D + 1/2` consumes a field on `Staggered[D]`
+    # and produces one on `D`.
+    #
     # The `Staggered[D]` overload must come before the generic `D` overload so
-    # that shifting *from* a staggered dimension resolves back to the base
-    # dimension (involution) instead of producing `Staggered[Staggered[D]]`.
+    # that a shift naming a staggered dimension consumes the base dimension
+    # (involution) instead of demanding a `Staggered[Staggered[D]]` field.
     #
     # The `type: ignore[misc]` comments silence a *definition-site* mypy
     # restriction ("Self argument missing for a non-static method"): mypy does
@@ -112,11 +122,11 @@ class DimensionMeta(type):
     @overload
     def __add__(  # type: ignore[misc]
         cls: type[Staggered[D]], offset: float
-    ) -> Connectivity[D, Staggered[D]]: ...
+    ) -> Connectivity[Staggered[D], D]: ...
     @overload
     def __add__(  # type: ignore[misc]
         cls: type[D], offset: float
-    ) -> Connectivity[Staggered[D], D]: ...
+    ) -> Connectivity[D, Staggered[D]]: ...
     def __add__(cls, offset: int | float) -> Connectivity[Any, Any]:
         if isinstance(offset, int):
             return Connectivity(cls, cls, offset)
@@ -124,18 +134,18 @@ class DimensionMeta(type):
             raise ValueError(
                 f"Only integral or half-integral offsets are supported, got '{offset}'."
             )
-        return Connectivity(dual(cls), cls, offset)
+        return Connectivity(cls, dual(cls), offset)
 
     @overload
     def __sub__(cls: type[AnyD], offset: int) -> Connectivity[AnyD, AnyD]: ...  # type: ignore[misc]
     @overload
     def __sub__(  # type: ignore[misc]
         cls: type[Staggered[D]], offset: float
-    ) -> Connectivity[D, Staggered[D]]: ...
+    ) -> Connectivity[Staggered[D], D]: ...
     @overload
     def __sub__(  # type: ignore[misc]
         cls: type[D], offset: float
-    ) -> Connectivity[Staggered[D], D]: ...
+    ) -> Connectivity[D, Staggered[D]]: ...
     def __sub__(cls, offset: int | float) -> Connectivity[Any, Any]:
         return cast("Connectivity[Any, Any]", cast(Any, cls) + (-offset))
 
@@ -231,11 +241,21 @@ def _is_staggered(dim: DimensionMeta) -> bool:
     return issubclass(dim, Staggered)
 
 
-def dual(dim: DimensionMeta) -> DimensionMeta:
-    """Return the dual-grid counterpart of a dimension class (involution)."""
+@overload
+def dual(dim: type[Staggered[D]]) -> type[D]: ...
+@overload
+def dual(dim: type[D]) -> type[Staggered[D]]: ...
+def dual(dim: Any) -> Any:
+    """
+    Return the dual-grid counterpart of a dimension class (involution).
+
+    The typed counterpart of gt4py's value-level `flip_staggered`. A
+    dual-generic operator needs it because a shift names the *result* grid,
+    which for such an operator is the dual of the field's own grid.
+    """
     if _is_staggered(dim):
-        return cast(DimensionMeta, dim.base)  # type: ignore[attr-defined]  # staggered dims carry `base`
-    return cast(DimensionMeta, Staggered[dim])  # type: ignore[valid-type]  # value-level use
+        return dim.base
+    return Staggered[dim]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -391,11 +411,13 @@ class NdField(Generic[DimsT, DT]):
     """
     Runtime implementation of the `Field` protocol (periodic boundaries).
 
-    Conventions (position of staggered point ``i`` is ``i + 1/2``):
-    given ``b = a(conn)``, ``b[p] = a[p + conn.offset]`` where positions are
-    grid points of the respective dimensions. In index space this is a shift by
-    ``ceil(offset)`` when reading from an unstaggered dimension and by
-    ``floor(offset)`` when reading from a staggered one.
+    Conventions follow gt4py as shipped (ADR 0026): staggered point ``i`` sits
+    at position ``i - 1/2``, so ``Staggered[I](0)`` is the point just *below*
+    ``I(0)``. Given ``b = a(conn)``, the point of ``b`` at index ``p`` reads
+    ``a`` at position ``pos(p) + frac(conn.offset)``. In index space that is a
+    shift by ``ceil(offset)`` when the shift names an unstaggered dimension and
+    by ``floor(offset)`` when it names a staggered one — keyed on the dimension
+    the *result* lives on, not the one the field is on.
     """
 
     dimensions: tuple[DimensionMeta, ...]
@@ -415,7 +437,7 @@ class NdField(Generic[DimsT, DT]):
                 f"Field defined on '{self.dimensions}' has no dimension '{conn.codomain}'."
             )
         axis = self.dimensions.index(conn.codomain)
-        if issubclass(conn.codomain, Staggered):
+        if issubclass(conn.domain_dim, Staggered):
             index_shift = math.floor(conn.offset)
         else:
             index_shift = math.ceil(conn.offset)
