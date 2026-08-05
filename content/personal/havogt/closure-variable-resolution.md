@@ -1,7 +1,7 @@
 ---
 title: Closure variable resolution in gt4py.next
 author: havogt
-tags: [frontend, foast, past, closure-variables, name-resolution, constants, builtins, aliasing, gtir, lowering]
+tags: [frontend, foast, past, closure-variables, name-resolution, constants, builtins, aliasing, gtir, lowering, contextvar, ambient, fields, mesh, static-args]
 created: 2026-06-12
 status: draft
 ---
@@ -193,6 +193,57 @@ recompilation cost). A separate opt-in (`gtx.constant_field(field, freeze=True)`
 could bake the buffer in as a true constant, layered on `StaticArg`-style
 descriptors (ADR 0021 — Argument Descriptors). This fits A (the canonicalization
 pass introduces the hidden parameter) and becomes more natural under B.
+
+### Stretch goal: ambient values bound at execution time
+
+The stretch goal above binds at *decoration* time. The variant worth recording
+binds later: a user declares a value once, globally, and any field operator
+reaches it without it appearing in a signature — a `ContextVar` filled at
+program-execution time (JIT time for compiled backends).
+
+The motivating case is mesh properties. They are scalars on a Cartesian grid
+(`dx`, `dy`) and fields on an unstructured one (connectivities plus their
+weights); both are fixed for the lifetime of the application, and both must
+today be carried explicitly — as extra operator parameters, or as the
+`offset_provider` threaded down the call chain. Every operator between the
+caller and the one that actually needs a weight has to name it.
+
+Most of the machinery exists, so this is more unification than invention:
+
+- **`ContextVar`s are already how gt4py carries such values.**
+  `next/embedded/context.py` holds `_offset_provider` and
+  `_closure_column_range`, with an `update()` context manager and
+  `get_offset_provider()` — internal and embedded-only today.
+- **The scalar case already works**, but only through a namespace object:
+  `ConstantPythonNamespaceObject = eve_utils.FrozenNamespace | enum.EnumMeta`
+  (`type_translation.py`), folded in `closure_var_folding.py`, fingerprint-aware
+  in `fingerprinting.py`.
+- **The field case is the stretch goal above**: hidden parameter via
+  `__gt_implicit_args__()`, and *bind the binding, not the buffer*, so only the
+  type/domain descriptor enters the compiled cache key.
+
+What late binding adds over the decoration-time variant is that the same
+operators can run against a *different* mesh in one process; the decoration-time
+form fixes the value before any operator is defined.
+
+Open questions: what "static for the lifetime of the application" means
+operationally (per process, per `ContextVar` scope, or per compiled program —
+and what happens on rebinding: recompile, reject, or re-bind an argument
+descriptor); which part of an ambient field enters the fingerprint; how an
+ambient declaration is typed, and whether an operator's type should reflect its
+ambient dependencies at all; and the standard objection to dynamic scoping —
+errors when nothing is bound must be good, and there must be a way to see what
+an operator depends on ambiently.
+
+The ceiling this aims at is a mesh concept built on top, where connectivities
+and weights are properties of an ambient mesh rather than arguments — see
+[[personal/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]].
+It would also be a plausible substrate for
+[[personal/egparedes/discretization-independent-fd-syntax|A discretization-independent
+surface syntax]], whose mesh-invariant surface needs weights and connectivity to
+come from a declared mesh property rather than from operator arguments (that
+proposal is a higher-level surface layered on gt4py's core concepts, not a
+replacement for them).
 
 ### Source material
 
