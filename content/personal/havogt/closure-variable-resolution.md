@@ -1,7 +1,7 @@
 ---
 title: Closure variable resolution in gt4py.next
 author: havogt
-tags: [frontend, foast, past, closure-variables, name-resolution, constants, builtins, aliasing, gtir, lowering, contextvar, ambient, fields, mesh, static-args]
+tags: [frontend, foast, past, closure-variables, name-resolution, constants, builtins, aliasing, gtir, lowering, contextvar, ambient, containers, annotations, fields, mesh, static-args, offset-provider]
 created: 2026-06-12
 status: draft
 ---
@@ -197,121 +197,95 @@ pass introduces the hidden parameter) and becomes more natural under B.
 ### Stretch goal: ambient values bound at execution time
 
 The stretch goal above binds at *decoration* time. The variant worth recording
-binds later: a user declares a value once, globally, and any field operator
-reaches it without it appearing in a signature — a `ContextVar` filled at
-program-execution time (JIT time for compiled backends).
+binds later: a value is declared once and reached from any operator without
+appearing in a signature, so it need not be threaded through nested calls.
 
 > **Prototyped**: gt4py branch
 > [`ambient-offset-provider`](https://github.com/havogt/gt4py/pull/71) (fork PR).
-> Everything below marked *measured* comes from there; everything marked *open*
-> is still open.
+> Claims marked *measured* come from there; everything under **Open** is open.
 
-The motivating case is mesh properties. They are scalars on a Cartesian grid
-(`dx`, `dy`) and fields on an unstructured one (connectivities plus their
-weights); both must today be carried explicitly — as extra operator parameters,
-or as the `offset_provider` threaded down the call chain. Every operator between
-the caller and the one that actually needs a weight has to name it.
+The motivating case is mesh properties: scalars on a Cartesian grid (`dx`, `dy`)
+and connectivities plus weights on an unstructured one. Today each is carried
+explicitly — as extra operator parameters, or as the `offset_provider` threaded
+down the call chain — so every operator between the caller and the one that
+actually needs a weight has to name it.
 
 #### Surface
 
-One rule for everything ambient: **the declaration is the key**.
+Declarations are **annotations in a container**, and what they bind to is a plain
+`contextvars.ContextVar`.
 
 ```python
-V2E = gtx.FieldOffset("V2E", source=Edge, target=(Vertex, V2EDim))
-dx = gtx.Static[float]              # a value, folded into the generated code
-nu = gtx.Extern[float]              # a value, passed at runtime
+class Grid(gtx.Container):
+    dx: gtx.Static[float]      # folded into the generated code
+    nu: gtx.Extern[float]      # passed as a runtime argument
+
+
+grid = Grid()
 
 
 @gtx.field_operator
 def delta_x(f: IJField) -> IJField:
-    return (1.0 / dx) * (f(I + 1) - f)     # never a parameter
+    return (1.0 / grid.dx) * (f(I + 1) - f)     # never a parameter
 
 
-prog(f, out, bind={V2E: connectivity, dx: 0.5})   # or: with gtx.bind(dx, 0.5): ...
+prog(f, out, bind=Grid(dx=0.5, nu=1e-3))
 ```
 
-A `FieldOffset` is *already* a declaration — it names the offset and fixes its
-source and target — so it binds exactly like a value, and a program called
-without an `offset_provider` assembles one from the bound offsets. A container
-may declare what it supplies, with the class attribute holding the declaration
-and the instance attribute the value:
+Three things make this work without any bespoke value object:
 
-```python
-class Mesh:
-    V2E = V2E              # this mesh supplies the V2E connectivity
-    dx = physics.dx
+- **`Grid.dx` (class access) *is* the `ContextVar`** — the key `bind=` takes.
+  **`grid.dx` (instance access) is its value**, so embedded execution, which runs
+  the operator body as plain Python, sees an ordinary float. An earlier revision
+  gave the declaration an arithmetic protocol to fake this; that is gone, along
+  with the gaps it had (no comparisons, no `%`, no numpy interop).
+- **A filled container binds everything it carries.** `Grid(dx=0.5, nu=1e-3)`
+  provides the grid as one thing; each program picks the parts it reads, rather
+  than the caller tracking which those are. The two uses of an instance do not
+  collide: a filled one keeps values in its instance dict, so attribute access
+  finds them directly; an empty one has nothing there, so access falls through to
+  the variable. The empty instance is the one operators read through.
+- **`Static[T]` and `Extern[T]` are `Annotated` aliases** (PEP 695), so a type
+  checker sees plain `T` and only the binding machinery reads the marker.
 
-
-prog(f, out, bind=Mesh(...))
-```
-
-Binding by declaration *identity* rather than by attribute name is what lets a
-container supply the very offset an operator refers to, rather than one that
-merely shares its name — and it means a container attribute need not be named
-after the declaration at all (*measured*: an attribute called `spacing` resolves
-`physics.dx` correctly, across modules).
-
-`bind=` is sugar over the `ContextVar`, scoped to one call, so the two spellings
-compose rather than compete.
+A `FieldOffset` binds the same way, carrying its own `ContextVar`, so
+`bind={V2E: connectivity}` and a container of values are one mechanism.
 
 #### How it works
 
-- **A declaration carries its type.** `Static[float]` implements `__gt_type__`,
-  and `type_translation.from_value` already dispatches on that — so an operator
-  referring to an ambient value type-checks when it is *defined*, with nothing
-  bound. **No type-system change was needed.** An untyped placeholder fails with
-  `DSLTypeError: Unexpected object ...`, and the failure is temporal, not
-  spatial: it happens in the same file, so putting the declaration in another
-  module changes nothing.
+- **A declaration types itself**, so an operator referring to one type-checks when
+  it is *defined*, with nothing bound: a container types itself as a namespace
+  over its declared types. **No type-system change was needed.**
 - **The reference becomes a synthesised program parameter**, added once in
-  `func_to_past`. From there it travels the ordinary path: type checking,
-  lowering, `static_params` and the compiled-program key all treat it as an
-  argument, and only the value is supplied per call.
-- **The two forms differ in one place only** — whether that parameter is listed
-  as static. `Extern[T]` stays a runtime argument; `Static[T]` is a static
-  argument, so the *existing* fold in `past_to_itir` bakes it in and the
-  *existing* `StaticArg` key specialises on it. *Measured* on gtfn and dace with
-  two values: `Static` compiles 2 variants, `Extern` 1, both correct.
-- **Connectivities identify by content, not by `id`.** `gtx.freeze(conn)` caches
-  a content hash once; `hash_offset_provider_items_by_id` prefers it. *Measured*:
-  3 compiled variants drop to 2 when two structurally identical meshes stop
-  being keyed apart by object identity — that function's own docstring warns it
-  "could generate different hashes for two offset providers that are
-  semantically equal".
+  `func_to_past`. From there it travels the ordinary path — type checking,
+  lowering, `static_params`, the compiled-program key — and only the value is
+  supplied per call.
+- **The two forms differ in one place only**: whether that parameter is listed as
+  static. *Measured* on gtfn and dace with two values: `Static` compiles 2
+  variants, `Extern` 1, both correct.
+- **Only declarations an operator actually reads become parameters.** A container
+  is a place to declare things; an operator that never reads `grid.dx` must not
+  acquire it, or a `Static[T]` would specialise the compiled program on a value
+  it does not use.
+- **Names are container-qualified** (`Grid_dx`), so two modules that both declare
+  a `dx` cannot collide in the synthesised signature.
+- **Connectivities identify by content, not by `id`.** `gtx.freeze(conn)` caches a
+  content hash once; `hash_offset_provider_items_by_id` prefers it. *Measured*: 3
+  compiled variants drop to 2 when two structurally identical meshes stop being
+  keyed apart by object identity.
+- **Nothing is global.** The offset provider is assembled from the offsets *this
+  program* references, not from everything currently bound. Scanning globally was
+  not merely inelegant: an unrelated bound mesh leaked into every program's
+  offset provider, where it perturbed the compiled-program key and forced
+  spurious recompiles.
 
-Three things it turned out **not** to need, each of which was assumed at some
-point in the design: a new FOAST specialization step (the existing static-argument
-fold suffices); threading the parameter into operator signatures and call sites
-(a free symbol in a lowered operator resolves against the *program's* parameters,
-and both gtfn and dace codegen fine that way); and a per-operator inspection pass
-(`transform_utils._get_closure_vars_recursively` already collects declarations
-transitively through nested operators).
-
-#### Transition: retiring the second binding rule
-
-The prototype first grew *two* binding mechanisms with different identity rules:
-connectivities were harvested from a bound object by attribute **name** (a
-`Namespace`), values were keyed by declaration **identity**. Same surface, two
-rules — and the name-based half needed a collision check, because two namespaces
-could each offer an offset called `V2E`.
-
-Unifying on declarations removes `Namespace`, the attribute harvesting and that
-collision check outright, and it is worth doing in two steps:
-
-1. **Move only the binding surface.** Offsets bind by declaration; the
-   `offset_provider` is still assembled from the bound ones and passed exactly as
-   today, so the frontend, the IR and the backends are untouched. *This step is
-   implemented.*
-2. **Then consider making connectivities ordinary ambient values**, i.e. an
-   `Extern[Connectivity]` that becomes a synthesised parameter like any other,
-   at which point `offset_provider` stops being a separate concept. This is not
-   obviously right and should not be assumed: `offset_provider` carries things
-   the parameter path does not model today (its *type* drives domain inference
-   and connectivity typing, and `arguments.py` still notes the temporary pass
-   needs the runtime object). Worth a separate look rather than a follow-through.
-
-The staging matters because step 1 is a pure surface change with no risk to the
-toolchain, while step 2 touches how connectivities are typed and inferred.
+Four things it turned out **not** to need, each assumed at some point: a new FOAST
+specialization step (the existing static-argument fold suffices, so there is no
+dependency on the dtype-generics work); threading the parameter into operator
+signatures and call sites (a free symbol in a lowered operator resolves against
+the *program's* parameters, and both gtfn and dace codegen fine that way); a
+per-operator inspection pass (`_get_closure_vars_recursively` already collects
+declarations transitively); and a registry of what is bindable.
 
 #### Binding time
 
@@ -319,29 +293,62 @@ toolchain, while step 2 touches how connectivities are typed and inferred.
 **static for a jitted program**. That makes the two forms a declaration-site
 choice of what identifies a value in the jit key: `Static[T]` puts the *value*
 there, `Extern[T]` only its type. Which also dissolves an apparent conflict with
-[[personal/havogt/jax-connectivities/jax-connectivities|the JAX connectivities proposal]] — a
-connectivity wants descriptor-identity (one program per mesh *class*), a scalar
+[[personal/havogt/jax-connectivities/jax-connectivities|the JAX connectivities proposal]] —
+a connectivity wants descriptor-identity (one program per mesh *class*), a scalar
 wants value-identity, and nothing forces one policy on both.
+
+A missing value surfaces at **call time**, on every call, before any lowering —
+because the declaration is a parameter and its value has to be collected to pass
+it. *Measured*: identical on the compiled and embedded paths, and the error names
+the qualified declaration (`Ambient value 'Grid_nu' is not bound`).
+
+#### Scope and limits
+
+- **Sequential and nested bindings behave as `ContextVar`s do.** *Measured*: two
+  programs against two different grids, per call and nested, with the outer
+  binding restored on exit. What is excluded is narrower — two bindings of the
+  *same* container live at once for one invocation, e.g. interpolating between a
+  source and a target grid, which needs two container classes.
+- **Partial containers are permitted.** Omitting a declaration this program never
+  reads is fine; omitting one it does read fails at call time. The cost is that
+  `Grid(dx=0.5)` is accepted even when `nu` was meant, and the mistake surfaces
+  later. Requiring completeness at construction would catch it at the bind site,
+  at the price of breaking every construction site whenever a declaration is
+  added — an open choice, not a settled one.
+
+#### Transition for connectivities
+
+Offsets and values now bind by one rule, but the `offset_provider` is still
+assembled internally and passed exactly as today. The end state is `mesh.V2E`
+read like any other ambient value, reached in steps of very different cost:
+
+1. **Uniform binding, no frontend change** — done.
+2. **Offsets declared in containers** while operators still write `a(V2E)`. The
+   container attribute and the `FieldOffset` must be the *same* declaration, so
+   the `FieldOffset` should be derived from the annotation rather than declared
+   twice; otherwise name coupling returns.
+3. **Operators write `a(mesh.V2E)`.** The expensive one: a shift takes a
+   `FieldOffset` *symbol* resolved by name, and the provider's **type** drives
+   domain inference and connectivity typing (`arguments.py` still notes the
+   temporary pass needs the runtime object). The shift must accept an expression
+   and the type must come from the declaration. Worth its own investigation.
 
 #### Open
 
-- **Canonical identifiers.** Synthesised parameters currently take the closure
-  variable's *local* name, so two operators naming the same declaration
-  differently, or two modules that both use `dx`, collide. Declarations should be
-  named explicitly (`Static[float]("dx")`) with a FOAST rename pass; a generated
-  counter will not do, since the name lands in the compiled signature and would
-  shift with import order.
 - **Ambient fields** (`mesh.edge_length`) are not implemented, but now look like
   an `Extern[Field[...]]` — a synthesised parameter with no folding, i.e. the
   read-only-field stretch goal above with a later binding time.
 - **Immutability.** `freeze(readonly=True)` would make the cached content hash
   trustworthy, but the gtfn bindings are generated with mutable `ndarray`
   parameters and reject a read-only array outright, so it is off by default.
-- **Debuggability**, unchanged: errors when nothing is bound must be good, and
-  there should be a way to see what an operator depends on ambiently.
+- **A small `Declaration` record survives** (name, type, kind, variable). It is
+  not the value-impersonating object it replaced, but the type and kind have to
+  live somewhere and a `ContextVar` has no room for them.
+- **Debuggability**, unchanged: there should be a way to see what an operator
+  depends on ambiently.
 
-The ceiling this aims at is a mesh concept built on top, where connectivities
-and weights are properties of an ambient mesh rather than arguments — see
+The ceiling this aims at is a mesh concept built on top, where connectivities and
+weights are properties of an ambient mesh rather than arguments — see
 [[personal/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]].
 It would also be a plausible substrate for
 [[personal/egparedes/discretization-independent-fd-syntax|A discretization-independent
