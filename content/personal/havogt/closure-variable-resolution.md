@@ -267,8 +267,10 @@ A `FieldOffset` binds the same way, carrying its own `ContextVar`, so
   is a place to declare things; an operator that never reads `grid.dx` must not
   acquire it, or a `Static[T]` would specialise the compiled program on a value
   it does not use.
-- **Names are container-qualified** (`Grid_dx`), so two modules that both declare
-  a `dx` cannot collide in the synthesised signature.
+- **Names are qualified by the container's module and class**, so two modules
+  that both declare a `Grid.dx` get separate parameters. A bare class name is not
+  enough: sharing a parameter is *silently wrong* rather than an error, since one
+  binding simply wins.
 - **Connectivities identify by content, not by `id`.** `gtx.freeze(conn)` caches a
   content hash once; `hash_offset_provider_items_by_id` prefers it. *Measured*: 3
   compiled variants drop to 2 when two structurally identical meshes stop being
@@ -309,6 +311,13 @@ the qualified declaration (`Ambient value 'Grid_nu' is not bound`).
   binding restored on exit. What is excluded is narrower — two bindings of the
   *same* container live at once for one invocation, e.g. interpolating between a
   source and a target grid, which needs two container classes.
+- **Container identity must be stable across runs**, because the parameter name it
+  produces feeds the stage fingerprint and hence the build-cache key — `id()`
+  would be unique but would miss the cache on every restart. Module plus
+  qualified name is stable, and unique in practice. The corner case where it is
+  not: two containers produced by the same factory share both and nothing
+  distinguishes them, so that is rejected at definition (`name=` separates them
+  if intended) rather than left to collide silently.
 - **Partial containers are permitted.** Omitting a declaration this program never
   reads is fine; omitting one it does read fails at call time. The cost is that
   `Grid(dx=0.5)` is accepted even when `nu` was meant, and the mistake surfaces
