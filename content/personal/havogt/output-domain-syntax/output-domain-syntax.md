@@ -357,13 +357,19 @@ so no new information has to be plumbed.
   the existing `concat_where` condition vocabulary verbatim, so #1405's diff becomes
   `concat_where(cond, x, 0.0)` → `restrict(x, cond)` — strictly less code, same shape. Embedded is
   free (`restrict(f, d) == f[d]`).
-- **Cons.** Needs real IR work: a `restrict` builtin (there is none — GTIR has `as_fieldop(stencil,
-  domain)` and `concat_where`, but no first-class domain-narrowing primitive), and domain inference
-  must intersect it with the target domain and propagate the narrowed domain to the inputs. That is
-  where the performance win lives, and also where the risk is. Hides the write extent from the call
-  site, which is where halo policy is decided. Cannot express a *call-site-specific* narrowing.
-- **Verdict.** Attractive and largely orthogonal to Option 3 — they compose by intersection. Should
-  be prototyped, not committed to; the claim "domain inference handles this" is unverified.
+- **Cons.** In a compiled backend the output domain is not just where values land — it is **where
+  kernels execute**. The statement's domain is the iteration space that is handed to the backend, so
+  moving a narrowing inside the operator body means the launch bounds are now determined by an
+  expression in the body rather than by the statement. That is a much larger change than a surface
+  one: it needs a `restrict` builtin (GTIR has `as_fieldop(stencil, domain)` and `concat_where`, but
+  no first-class domain-narrowing primitive), domain inference must intersect it with the target
+  domain and propagate it to the inputs, and every backend must derive its launch configuration from
+  the result. Restriction (slicing generally) inside field operators is a plausible future
+  direction, but it is a separate, bigger project. Secondary: it hides the write extent from the
+  call site, which is where halo policy is decided, and it cannot express a *call-site-specific*
+  narrowing.
+- **Verdict.** Not a competitor to Option 3 on this timescale. Keep as a future direction to be taken
+  up on its own terms, not as part of fixing the output-domain surface.
 
 ### Option 6 — Domains as first-class values
 
@@ -444,10 +450,12 @@ Python-level check in the compiled-program argument layer (cheap where the bound
 parameters) or backend support for an assertion (general, but per-backend work). Decide by measuring
 how many icon4py bounds are plain parameters; §7 OQ3.
 
-**Stage 3 — prototype Option 5, then decide.** If domain inference takes a `restrict` cleanly, it is
-the better long-term home for validity regions and it removes the call-site edit entirely. If it does
-not, Option 3 already carries the migration. Independently, replace the positional named-collection
-`TODO` with by-name matching (Option 4).
+**Stage 3 — by-name matching for named collections (Option 4).** Replace the positional
+named-collection `TODO` in `past_passes/type_deduction.py` with matching on field names.
+
+Option 5 is explicitly **not** staged here: because the statement domain is the kernel launch domain,
+restriction inside a field operator is a separate project with backend-wide impact, not a step in
+this one.
 
 Do **not** take Options 6 or 7 as prerequisites — they change what a bound *is*, not how an output is
 paired with one, and both remain available on top of Option 3's subscript.
@@ -527,8 +535,10 @@ correct users; still, it should land behind a warning first and be measured agai
   Python-level check in the argument layer (loud, only where bounds are plain parameters), or a
   backend assertion (general, per-backend). Needs a count of how many icon4py domain bounds are plain
   parameters versus expressions.
-- **OQ4 — Does domain inference accept a `restrict`?** Option 5 stands or falls on this and it is
-  unverified. `concat_where` already partitions domains, which is suggestive but not proof.
+- **OQ4 — What would in-operator restriction cost end to end?** Option 5's blocker is that the
+  statement domain is the kernel launch domain, so the question is not only whether domain inference
+  accepts a `restrict`, but how each backend derives its launch configuration once the narrowing
+  lives in the body. Worth scoping as its own effort.
 - **OQ5 — Named-collection matching.** Replacing element-order matching with by-name matching (the
   `TODO` in `past_passes/type_deduction.py`) is a small change with a compatibility question: is any
   existing code relying on positional matching for a named collection?
