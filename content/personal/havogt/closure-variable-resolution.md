@@ -201,7 +201,9 @@ binds later: a value is declared once and reached from any operator without
 appearing in a signature, so it need not be threaded through nested calls.
 
 > **Prototyped**: gt4py branch
-> [`ambient-offset-provider`](https://github.com/havogt/gt4py/pull/71) (fork PR).
+> [`ambient-clean`](https://github.com/havogt/gt4py/pull/72) (fork PR), a
+> reimplementation from specification;
+> [#71](https://github.com/havogt/gt4py/pull/71) is the superseded original.
 > Claims marked *measured* come from there; everything under **Open** is open.
 
 The motivating case is mesh properties: scalars on a Cartesian grid (`dx`, `dy`)
@@ -271,23 +273,28 @@ A `FieldOffset` binds the same way, carrying its own `ContextVar`, so
   that both declare a `Grid.dx` get separate parameters. A bare class name is not
   enough: sharing a parameter is *silently wrong* rather than an error, since one
   binding simply wins.
-- **Connectivities identify by content, not by `id`.** `gtx.freeze(conn)` caches a
-  content hash once; `hash_offset_provider_items_by_id` prefers it. *Measured*: 3
-  compiled variants drop to 2 when two structurally identical meshes stop being
-  keyed apart by object identity.
 - **Nothing is global.** The offset provider is assembled from the offsets *this
   program* references, not from everything currently bound. Scanning globally was
   not merely inelegant: an unrelated bound mesh leaked into every program's
   offset provider, where it perturbed the compiled-program key and forced
   spurious recompiles.
 
-Four things it turned out **not** to need, each assumed at some point: a new FOAST
-specialization step (the existing static-argument fold suffices, so there is no
-dependency on the dtype-generics work); threading the parameter into operator
-signatures and call sites (a free symbol in a lowered operator resolves against
-the *program's* parameters, and both gtfn and dace codegen fine that way); a
-per-operator inspection pass (`_get_closure_vars_recursively` already collects
-declarations transitively); and a registry of what is bindable.
+`Static[T]` does need a little machinery of its own, contrary to an earlier
+revision of this text. gt4py's existing static-argument substitution only visits
+the program body, and an ambient reference lives inside a lowered operator's
+function definition — so the parameter was *specialised* per value while the
+literal was never substituted, paying the recompile cost without the benefit.
+*Measured* by grepping the generated C++: `folded=False` before, `folded=True`
+after extending the substitution into the function definitions (filtered by each
+definition's own parameters, so a shadowing local cannot be clobbered). Note that
+the variant-count check above cannot catch this: it measures specialisation, not
+folding.
+
+Three things it turned out **not** to need, each assumed at some point: a new
+FOAST specialization step (so there is no dependency on the dtype-generics work);
+threading the parameter into operator signatures and call sites (a free symbol in
+a lowered operator resolves against the *program's* parameters, and both gtfn and
+dace codegen fine that way); and a registry of what is bindable.
 
 #### Binding time
 
@@ -350,9 +357,24 @@ read like any other ambient value, reached in steps of very different cost:
 - **Immutability.** `freeze(readonly=True)` would make the cached content hash
   trustworthy, but the gtfn bindings are generated with mutable `ndarray`
   parameters and reject a read-only array outright, so it is off by default.
-- **A small `Declaration` record survives** (name, type, kind, variable). It is
-  not the value-impersonating object it replaced, but the type and kind have to
-  live somewhere and a `ContextVar` has no room for them.
+- **Should `Grid.dx` be a `Declaration` rather than a raw `ContextVar`?** The
+  current answer is the plain variable, on the grounds that `contextvars` is the
+  stdlib mechanism for exactly this and the design should not invent its own. It
+  works, but the variable *owns nothing*: the type, the kind and the qualified
+  name live in a side record, so
+  - `bind={...}` cannot validate its keys — a wrong key can only ever produce a
+    generic "not a declaration" message, never one naming what was meant;
+  - it cannot type-check the value it is given, although the declared type is
+    known;
+  - `Grid.dx.set(0.5)` is legal and escapes all scoping, since it is just a
+    `ContextVar`.
+
+  A `Declaration` that *owns* its variable fixes all three and costs one small
+  object; it is close to what an earlier revision had, minus the part that was
+  actually wrong (impersonating a scalar through an arithmetic protocol, which
+  the container's descriptor split has since made unnecessary). Nothing but one
+  unit test depends on the current choice. Worth deciding deliberately rather
+  than by inheritance from "use the stdlib".
 - **Debuggability**, unchanged: there should be a way to see what an operator
   depends on ambiently.
 
