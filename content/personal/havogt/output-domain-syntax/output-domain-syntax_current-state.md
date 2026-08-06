@@ -25,6 +25,9 @@ Three execution paths accept `out` / `domain`, and they do **not** agree:
 | `out=f[{I: (1, 5)}]` (mapping subscript) | ✗ `AssertionError` in `_compute_field_slice` | ✗ `IndexError: Unsupported index type` | ✗ (same) |
 | `out=f[gtx.domain({I: (1, 5)})]` | ✗ (not callable in PAST) | **✓** (plain Python) | **✓** |
 | `out=state.u` (named-collection field) | ✓ | ✓ | ✓ |
+| `out=state.u[1:-1]` (subscript on a collection field) | ✗ `'Subscript.value' must be Name` | ✗ | ✗ |
+| `out=(state.u, state.v)` (destructure a collection) | ✗ type error, see §D2 | ✗ | ✗ |
+| `out=NT(u=…, v=…)` (reconstruct in PAST) | ✗ (call to a non-operator) | ✓ (plain Python) | ✓ |
 | `out=tup[0]` (tuple element) | ✗ type error | ✗ | ✗ |
 | `domain={I: …}` all dims, in order | ✓ | ✓ | ✓ |
 | `domain={J: …}` **partial** | **✗** `Dimensions in out field and field domain are not equivalent` | **✓** | **✓** |
@@ -100,6 +103,41 @@ TypeError: unhashable type: 'numpy.ndarray'
 
 An embedded `@gtx.program` body executes as plain Python, so `domain={pgrad: {...}}` is a real dict
 construction and raises. This is a hard constraint on the surface, not an implementation detail.
+
+## D2. Why a collection cannot carry the subscript
+
+Named collections are plain user types recognised structurally — there is no gt4py base class to
+define a domain subscript on, and for `NamedTuple` the slot is already occupied:
+
+```python
+>>> class NT(NamedTuple):
+...     u: F
+...     v: F
+>>> s = NT(u=field, v=field)
+>>> type(s[0]).__name__                       # integer indexing already means tuple-get
+'NumPyArrayField'
+>>> s[gtx.domain({IDim: (1, 3)})]
+TypeError: tuple indices must be integers or slices, not Domain
+
+>>> @dataclasses.dataclass
+... class DC:
+...     u: F
+...     v: F
+>>> DC(u=field, v=field)[gtx.domain({IDim: (1, 3)})]
+TypeError: 'DC' object is not subscriptable
+```
+
+Destructuring instead of subscripting is also closed — a named collection is not interchangeable
+with its tuple type at the `out` position:
+
+```
+Invalid call to 'fop_nt'.
+Expected keyword argument 'out' to be of type 'NamedTuple{u: Field[[IDim], float64], v: Field[[IDim], float64]}',
+got 'tuple[Field[[IDim], float64], Field[[IDim], float64]]'.
+    fop_nt(a, out=(out.u, out.v))
+```
+
+Hence per-output domains for a collection-valued `out` must be **named**, not attached.
 
 ## E. icon4py survey
 

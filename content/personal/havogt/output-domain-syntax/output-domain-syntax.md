@@ -302,10 +302,26 @@ down.
   `IndexError: Unsupported index type` while `f[gtx.domain({I: (1, 5)})]` works).
   Lifts D1 (nothing to broadcast), D3 (a restriction cannot leave the field), D7 (the
   `Subscript.value` widening it requires also enables `state.u[...]`).
-- **Cons.** Does not help when `out` is a *single symbol* denoting a tuple or named collection
-  (`out=out_state`) — there is no element to attach to without destructuring. `domain=` as a
-  structural tuple must therefore stay for that case, so we end up with two mechanisms rather than
-  one. The dict-in-subscript reads a little dense; §6.2 discusses alternatives.
+- **Cons.** Attachment lands on **`Field` leaves**, so it only applies where the out tree is spelled
+  down to the fields. When `out` is a *single symbol* denoting a tuple or a named collection
+  (`out=out_state`) there is nothing to attach to, and the collection cannot supply the missing
+  subscript itself:
+  - a named collection is a **plain user `dataclass` / `NamedTuple`**, recognised structurally —
+    there is no gt4py base class on which to define `__getitem__`, so the user would have to write
+    it on their own type;
+  - for a `NamedTuple` that slot is **already taken**: `state[0]` is integer tuple-indexing and
+    returns a field, so a domain subscript would have to be a user-written overload on the index
+    type (`state[Domain]` today: `TypeError: tuple indices must be integers or slices, not Domain`);
+  - for a `dataclass` there is no subscript at all (`TypeError: 'DC' object is not subscriptable`).
+
+  Destructuring as an escape hatch is also closed today: `out=(state.u, state.v)` against an
+  operator returning `NT` fails with *"Expected keyword argument 'out' to be of type
+  `NamedTuple{u: …, v: …}`, got `tuple[…]`"* — a named collection is not interchangeable with its
+  tuple type at the `out` position.
+
+  So `domain=` as a structural tuple must stay for collection- and tuple-valued out symbols, and
+  the by-name mechanism of Option 4 is the real answer there — see the verdict below. The
+  dict-in-subscript also reads a little dense; §6.2 discusses alternatives.
 - **Verdict.** Recommended as the core.
 
 ### Option 4 — Named collections with keyed domains
@@ -323,13 +339,18 @@ a named collection supplies. #2428 already made named collections work with mult
 but the domain tuple is still matched **positionally in element order** — there is a
 `TODO(havogt)` in `past_passes/type_deduction.py` saying so.
 
-- **Pros.** The only form that gives real keyword indexing. Self-documenting; reorder-safe.
+- **Pros.** The only form that gives real keyword indexing. Self-documenting; reorder-safe. Crucially
+  it needs **no `__getitem__`**: the domains are named in the `domain=` argument, so nothing has to
+  be subscripted — which is exactly why it covers the case Option 3 structurally cannot.
 - **Cons.** Requires the operator to return a named collection. icon4py's dycore returns plain
   tuples; converting is a larger change than the syntax problem it solves, and the muphys/graupel
   collections are inputs, not outputs. Constructing a collection inside a PAST body is not currently
-  supported (only inside field operators).
-- **Verdict.** Complementary, not a substitute. Worth doing as a follow-up: replace the positional
-  `TODO` with true by-name matching, so that named-collection users get keyed domains for free.
+  supported (only inside field operators), so the `domain=Diagnostics(...)` spelling needs PAST to
+  admit a call to the collection type — or a by-name mapping instead.
+- **Verdict.** Complementary, and **not optional**: Options 3 and 4 divide the space rather than
+  compete. Attachment serves an out tree spelled down to fields (all four icon4py multi-domain call
+  sites, including #1405); by-name serves a collection-valued out symbol, where attachment cannot
+  reach. Replace the positional `TODO` with true by-name matching.
 
 ### Option 5 — Declare the output domain in the operator
 
@@ -521,10 +542,15 @@ correct users; still, it should land behind a warning first and be measured agai
 
 ## 7. Open questions / conflicts
 
-- **OQ1 — Two mechanisms, permanently?** Option 3 cannot serve `out=out_state`, so the positional
-  `domain=` tuple survives for that case. Is that acceptable, or should the single-symbol case be
-  forced to destructure (`out=(state.u, state.v[...])`, which Option 3's `Subscript.value` widening
-  enables anyway)?
+- **OQ1 — Two mechanisms, permanently?** Attachment reaches `Field` leaves only, so an `out` that is
+  a single tuple- or collection-valued symbol keeps the structural `domain=`. For **collections**
+  that is fine — Option 4's by-name form is better there anyway, and needs no subscript on the user's
+  type. For a plain **tuple** symbol (`out: tuple[F, F]`) there are no names either, so the
+  positional tuple is all that is left. Should the type check be relaxed so a tuple literal may
+  target a named-collection `out` (`out=(state.u, state.v[...])`, which Option 3's `Subscript.value`
+  widening would otherwise enable)? It buys attachment for collections at the price of dropping the
+  field names — probably the wrong trade, but it should be a decision rather than an accident of the
+  current `out.type` equality check.
 - **OQ2 — Direction of travel.** This note moves region information *to* the call site;
   [[personal/havogt/boundary-condition-syntax|boundary-condition syntax]] moves it *into* the
   operator body, and Option 5 sits in between. All three are defensible for different regions (a
