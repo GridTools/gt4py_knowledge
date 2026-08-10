@@ -6,7 +6,8 @@ created: 2026-08-06
 status: draft
 ---
 
-> Appendix to [[personal/havogt/output-domain-syntax|Surface syntax for per-output compute domains]].
+> Appendix to
+> [[personal/havogt/default-domain-and-out-restrictions|A default domain plus per-output restrictions]].
 > Everything here was **executed**, not read off the source. Base:
 > `GridTools/gt4py@43746f13a` (2026-08), CPython 3.13, backends `itir_python` (roundtrip),
 > `gtfn_cpu`, and embedded.

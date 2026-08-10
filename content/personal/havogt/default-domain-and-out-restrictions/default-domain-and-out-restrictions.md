@@ -15,14 +15,27 @@ status: draft
 > rule covers every case; the positional tuple, the partial-broadcast question and the
 > slicing-excludes-`domain` rule all disappear. Frontend only: the emitted GTIR is unchanged.
 
-> **Status**: draft design, not implemented. Drafted with AI assistance. This is the *design*;
-> the survey of today's behaviour, the alternatives considered and the icon4py evidence live in
-> [[personal/havogt/output-domain-syntax|Surface syntax for per-output compute domains]] — read that
-> first for **why**, this one for **what**.
+> **Status**: draft design, not implemented. Drafted with AI assistance. Claims about today's
+> behaviour were **executed, not read off the source** — see the appendix.
+
+> **Appendix**:
+> [[personal/havogt/default-domain-and-out-restrictions/default-domain-and-out-restrictions_current-state|Verified current state]]
+> — what `out` and `domain=` accept across the three execution paths (they disagree), the
+> out-of-bounds reproducer, why domains keyed by the out field cannot work, the icon4py survey of
+> 274 programs, and an implementation map.
 
 > **Origin**: [icon4py#1405 (review)](https://github.com/C2SM/icon4py/pull/1405#discussion_r3729957759)
 > — *"is this positional only (prone to mistakes?)? or can be indexed by kw somehow?"* — asked while
 > icon4py is migrating programs onto the current spelling.
+
+> **Related (in this repo)**:
+> [[personal/havogt/boundary-condition-syntax|Boundary-condition syntax over `concat_where`]] moves
+> region handling *into* the operator body, where this note moves it to the call site; both must
+> share one region vocabulary (OQ6).
+> [[personal/havogt/scan-redesign|Scan redesign]] proposes `KDim.start`/`KDim.stop` anchored indices
+> — the same anchors a runtime-valued relative bound would need (OQ7).
+> [[personal/havogt/field-data-protocol|FieldData protocol]] owns the embedded restriction machinery
+> (`sub_domain`) that §7 extends.
 
 ---
 
@@ -203,7 +216,7 @@ Every one of these is a `DSLError` with a source span:
 | `domain=` given and out leaves differ in their dimension sets | *"'domain' applies to all outputs and requires them to share dimensions; got `Field[[IDim]]` and `Field[[JDim]]`. Restrict each output individually."* |
 | `domain=` names a dimension the outputs do not have | *"Dimension 'KDim' is not a dimension of the output(s)."* |
 | a restriction names a dimension the field does not have | same, per output |
-| a bounded range is not inside the field's extent | *"Domain `(0, 8)` for 'IDim' is outside the extent `(0, 6)` of out field 'out'."* — the D3 fix |
+| a bounded range is not inside the field's extent | *"Domain `(0, 8)` for 'IDim' is outside the extent `(0, 6)` of out field 'out'."* — today this is an unchecked write on gtfn, see the appendix |
 | duplicate dimension in a mapping, non-integer bound, wrong tuple length | as today, but with spans |
 
 Where the containment check runs is the one open cost: fully static when the bounds are literals,
@@ -272,3 +285,9 @@ for all of the above. A `uses_multiple_output_domains` marker is missing from
 - **OQ6 — Region vocabulary.** The condition spelling of §2.2 is shared with `concat_where` and with
   [[personal/havogt/boundary-condition-syntax|boundary-condition syntax]]. Those must not diverge:
   whatever "a region" looks like there should be exactly what an out restriction accepts here.
+- **OQ7 — Relative bounds with runtime values.** Slices stay literal-only, because "a negative bound
+  counts from the end" is decided from the literal's sign and has no runtime equivalent. The mapping
+  form covers the need with absolute bounds, but "one in from each end of *this field*" then has no
+  short spelling. Anchored bounds — `f[{KDim: (KDim.start + 1, KDim.stop - 1)}]`, lowered via the
+  existing `get_domain_range` builtin — would supply it, and are the same anchors
+  [[personal/havogt/scan-redesign|the scan redesign]] proposes. One feature, to be decided once.

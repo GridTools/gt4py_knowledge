@@ -34,7 +34,6 @@ Work-in-progress proposals, organized by contributor.
 - [[personal/havogt/mesh-and-first-class-halos|A mesh concept with first-class halos]] — keywords: mesh, halos, unstructured, connectivities, offset-provider, domain-inference, distributed, halo-exchange, prior-art
 - [[personal/havogt/field-data-protocol|A FieldData protocol for gt4py.next embedded fields]] — keywords: fields, domain, data, protocol, embedded, function-fields, boundary-conditions, materialization, lazy, concat_where, origin, prior-art
 - [[personal/havogt/boundary-condition-syntax|Frontend syntax sugar for boundary conditions over concat_where]] — keywords: frontend, foast, boundary-conditions, concat_where, regions, syntax-sugar, if-elif-else, match, embedded, cartesian-parity, dsl-design, prior-art, python-versions, peps, piece-algebra, metaclass, replay
-- [[personal/havogt/output-domain-syntax|Surface syntax for per-output compute domains]] — keywords: frontend, past, domain, multiple-output-domains, tuples, named-collections, embedded, dsl-design, icon4py, concat_where, slicing, diagnostics, out-arguments
 - [[personal/havogt/default-domain-and-out-restrictions|A default domain plus per-output restrictions]] — keywords: frontend, past, domain, multiple-output-domains, out-arguments, tuples, named-collections, embedded, dsl-design, icon4py, concat_where, slicing
 
 ### edopao
