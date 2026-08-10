@@ -39,7 +39,7 @@ status: draft
 > which are the same anchors §6.3 needs for runtime-valued relative bounds.
 > [[personal/havogt/mesh-and-first-class-halos|Mesh with first-class halos]] would replace the
 > `start_edge_nudging_level_2`-style integer parameters with named zones — the long-horizon version
-> of Option 7.
+> of Option 6.
 > [[personal/havogt/field-data-protocol|FieldData protocol]] owns the embedded restriction
 > machinery (`sub_domain`) that Option 3 extends.
 
@@ -110,6 +110,12 @@ the call site**, so per-output domains stop being an exotic feature used by thre
 become the normal way to express "this output is only valid here". A syntax that is merely tolerable
 at three call sites is not good enough at thirty.
 
+This direction is not negotiable within the scope of this note: in a compiled backend the statement
+domain *is* the kernel launch domain. Expressing the narrowing inside the operator instead — a
+`restrict`, or field slicing in operator bodies generally — would make launch bounds depend on an
+expression in the body, with consequences across domain inference and every backend. That may well
+be worth doing one day, but it is its own project, not an alternative spelling considered here.
+
 Note the asymmetry the migration creates: in the body the region was written
 `(start_edge_nudging_level_2 <= dims.EdgeDim) & (dims.EdgeDim < end_edge_local)`; at the call site the
 *same region* must be re-spelled `{dims.EdgeDim: (start_edge_nudging_level_2, end_edge_local)}`, in a
@@ -135,7 +141,7 @@ Two conclusions that constrain the design:
   domain for all outputs. Any proposal that forces per-output spelling on them is a regression.
 - **Cross-statement repetition is a non-problem.** Programs are effectively single-statement, so a
   scoped construct (`with domain(...):` around a program body, a program-level default) would buy
-  almost nothing. This kills an option that looks attractive in the abstract; see Option 8.
+  almost nothing. This kills an option that looks attractive in the abstract; see Option 7.
 
 The three existing multi-domain call sites, however, are large:
 
@@ -285,7 +291,7 @@ domain={dims.CellDim: (horizontal_start, horizontal_end), dims.KDim: (vertical_s
 ```
 
 with `surface_k = {dims.KDim: (vertical_end - 1, vertical_end)}` spelled inline (five times, one line
-each) until Option 6 makes it nameable. 64 lines → ~10.
+each) until Option 5 makes it nameable. 64 lines → ~10.
 
 **Why this spelling and not another.** `f[domain]` is not new syntax: it is what embedded execution
 *already does* to implement `domain=` — `decorator.py` turns `domain=` into
@@ -352,47 +358,7 @@ but the domain tuple is still matched **positionally in element order** — ther
   sites, including #1405); by-name serves a collection-valued out symbol, where attachment cannot
   reach. Replace the positional `TODO` with true by-name matching.
 
-### Option 5 — Declare the output domain in the operator
-
-The information "the pressure gradient is only valid on `[nudging_2, local)`" is a property of the
-computation, not of the call site — that is why it lived in a `concat_where` before #1405. So let the
-operator keep saying it, without the dummy branch:
-
-```python
-@gtx.field_operator
-def _compute_rho_theta_pgrad_and_update_vn(..., start_edge_nudging_level_2: int32, end_edge_local: int32):
-    ...
-    return (
-        rho_at_edges,
-        theta_v_at_edges,
-        restrict(pgrad, (start_edge_nudging_level_2 <= dims.EdgeDim) & (dims.EdgeDim < end_edge_local)),
-        restrict(next_vn, start_edge_lateral_boundary <= dims.EdgeDim),
-    )
-```
-
-The call site then keeps a single `domain=` and the migration touches no call sites at all. Note that
-the zone bounds are *already* parameters of the operator (they were the `concat_where` conditions),
-so no new information has to be plumbed.
-
-- **Pros.** Single source of truth; the region is named by the local variable it constrains; reuses
-  the existing `concat_where` condition vocabulary verbatim, so #1405's diff becomes
-  `concat_where(cond, x, 0.0)` → `restrict(x, cond)` — strictly less code, same shape. Embedded is
-  free (`restrict(f, d) == f[d]`).
-- **Cons.** In a compiled backend the output domain is not just where values land — it is **where
-  kernels execute**. The statement's domain is the iteration space that is handed to the backend, so
-  moving a narrowing inside the operator body means the launch bounds are now determined by an
-  expression in the body rather than by the statement. That is a much larger change than a surface
-  one: it needs a `restrict` builtin (GTIR has `as_fieldop(stencil, domain)` and `concat_where`, but
-  no first-class domain-narrowing primitive), domain inference must intersect it with the target
-  domain and propagate it to the inputs, and every backend must derive its launch configuration from
-  the result. Restriction (slicing generally) inside field operators is a plausible future
-  direction, but it is a separate, bigger project. Secondary: it hides the write extent from the
-  call site, which is where halo policy is decided, and it cannot express a *call-site-specific*
-  narrowing.
-- **Verdict.** Not a competitor to Option 3 on this timescale. Keep as a future direction to be taken
-  up on its own terms, not as part of fixing the output-domain surface.
-
-### Option 6 — Domains as first-class values
+### Option 5 — Domains as first-class values
 
 Make `Domain` a type that a program parameter can have, and/or allow naming a domain in a program
 body:
@@ -414,7 +380,7 @@ def prog(..., interior: gtx.Domain, surface: gtx.Domain):
   migrate to *again*.
 - **Verdict.** Right direction, wrong order. Revisit after Option 3 has settled the surface.
 
-### Option 7 — Named zones from the mesh concept
+### Option 6 — Named zones from the mesh concept
 
 `out=vn[edges(Zone.NUDGING_LEVEL_2, Zone.LOCAL)]` — the horizontal bounds in every icon4py program
 are grid zones that have been flattened into `int32` parameters. See
@@ -426,7 +392,7 @@ are grid zones that have been flattened into `int32` parameters. See
 - **Verdict.** Long horizon. Option 3's subscript is the right place to plug it in later — one more
   spelling of "a restriction", not a new mechanism.
 
-### Option 8 — Do nothing new
+### Option 7 — Do nothing new
 
 Two sub-variants. **(a) Split the call**: one statement per domain group. This is what was done
 before #2225 and it re-runs the operator per group, which is exactly the cost #2225 removed —
@@ -445,10 +411,9 @@ programs are single-statement, so there is nothing to scope over.
 | **O2** field-keyed | by key | **✗ (unhashable)** | ✓ | ✗ | none | — |
 | **O3** attached | **adjacency** | ✓ (+1 small ext.) | n/a | ✓ | **none** | 1–2 weeks |
 | **O4** named collections | by key | ✓ | ✓ | ✗ | none | weeks (+ user migration) |
-| **O5** in-operator | adjacency (in body) | ✓ | n/a | ✓ | **IR + inference** | prototype first |
-| **O6** domain values | n/a | ✓ | n/a | ✓ | ABI, descriptors | months |
-| **O7** zones | n/a | ✓ | n/a | ✓ | mesh concept | long horizon |
-| **O8** status quo | positional | ✓ | ✗ | ✗ | none | zero |
+| **O5** domain values | n/a | ✓ | n/a | ✓ | ABI, descriptors | months |
+| **O6** zones | n/a | ✓ | n/a | ✓ | mesh concept | long horizon |
+| **O7** status quo | positional | ✓ | ✗ | ✗ | none | zero |
 
 ## 5. Recommendation
 
@@ -474,11 +439,7 @@ how many icon4py bounds are plain parameters; §7 OQ3.
 **Stage 3 — by-name matching for named collections (Option 4).** Replace the positional
 named-collection `TODO` in `past_passes/type_deduction.py` with matching on field names.
 
-Option 5 is explicitly **not** staged here: because the statement domain is the kernel launch domain,
-restriction inside a field operator is a separate project with backend-wide impact, not a step in
-this one.
-
-Do **not** take Options 6 or 7 as prerequisites — they change what a bound *is*, not how an output is
+Do **not** take Options 5 or 6 as prerequisites — they change what a bound *is*, not how an output is
 paired with one, and both remain available on top of Option 3's subscript.
 
 ## 6. Semantics of the recommended core
@@ -553,22 +514,18 @@ correct users; still, it should land behind a warning first and be measured agai
   current `out.type` equality check.
 - **OQ2 — Direction of travel.** This note moves region information *to* the call site;
   [[personal/havogt/boundary-condition-syntax|boundary-condition syntax]] moves it *into* the
-  operator body, and Option 5 sits in between. All three are defensible for different regions (a
-  physical boundary condition belongs in the body; a halo policy belongs at the call site), but they
-  must not end up with three different notations for the same set of indices. Fixing the shared
-  region vocabulary is more urgent than choosing between them.
+  operator body. Both are defensible for different regions (a physical boundary condition belongs in
+  the body; a halo policy belongs at the call site), but they must not end up with two different
+  notations for the same set of indices. Fixing the shared region vocabulary is more urgent than
+  choosing between them.
 - **OQ3 — Where does the bounds check live?** Frontend clip via `get_domain_range` (free, silent),
   Python-level check in the argument layer (loud, only where bounds are plain parameters), or a
   backend assertion (general, per-backend). Needs a count of how many icon4py domain bounds are plain
   parameters versus expressions.
-- **OQ4 — What would in-operator restriction cost end to end?** Option 5's blocker is that the
-  statement domain is the kernel launch domain, so the question is not only whether domain inference
-  accepts a `restrict`, but how each backend derives its launch configuration once the narrowing
-  lives in the body. Worth scoping as its own effort.
-- **OQ5 — Named-collection matching.** Replacing element-order matching with by-name matching (the
+- **OQ4 — Named-collection matching.** Replacing element-order matching with by-name matching (the
   `TODO` in `past_passes/type_deduction.py`) is a small change with a compatibility question: is any
   existing code relying on positional matching for a named collection?
-- **OQ6 — Does `out=f[...]` want to grow into tuple-element writes?** `out=tup[0]` is currently a type
+- **OQ5 — Does `out=f[...]` want to grow into tuple-element writes?** `out=tup[0]` is currently a type
   error. Allowing it would let a program write into part of a tuple parameter — adjacent to this
   proposal, and it would make the subscript node mean two different things (restriction and
   projection) unless the type decides.
