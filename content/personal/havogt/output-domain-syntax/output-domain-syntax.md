@@ -24,6 +24,12 @@ status: draft
 > "what is possible today" claims are **empirically verified** on `gt4py@43746f13a`, not read off
 > the source — see the appendix for the probes and their output.
 
+> **Superseded in part**: the concrete design that came out of this analysis is
+> [[personal/havogt/default-domain-and-out-restrictions|A default domain plus per-output
+> restrictions]] — one domain per statement plus restrictions written inside `out`, with the
+> tree-shaped `domain=` retired. This note remains the survey of today's behaviour and of the
+> alternatives; where the two disagree on what to build, the design note is current.
+
 > **Appendix**:
 > [[personal/havogt/output-domain-syntax/output-domain-syntax_current-state|Verified current state]] —
 > the capability matrix across the three execution paths, the probe scripts and their raw output
@@ -416,6 +422,11 @@ programs are single-statement, so there is nothing to scope over.
 | **O7** status quo | positional | ✓ | ✗ | ✗ | none | zero |
 
 ## 5. Recommendation
+
+> Superseded by [[personal/havogt/default-domain-and-out-restrictions|the design note]], which keeps
+> Stage 0 and Stage 1 below but goes further: `domain=` becomes a single default rather than a tree,
+> the positional tuple is retired, and per-output restrictions become the only way to differ. The
+> staging below is still the shape of the work.
 
 **Stage 0 — correctness, ship independently (days).** The half of Option 1 that is not a syntax
 question: accept partial and unordered domains in the compiled path so that the three execution
