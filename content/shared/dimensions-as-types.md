@@ -82,12 +82,6 @@ class K(Dimension, kind=DimensionKind.VERTICAL): ...
   connectivities, `__call__` → `NamedIndex`, comparison operators → `Domain`,
   `__repr__`. Binary operators on a class object dispatch through its metaclass,
   so this is the only place they can live.
-- **Name-based `__eq__`/`__hash__` on the metaclass** reproduces today's
-  `Dimension.__eq__` (which compares `.value` only) and makes a new-style class
-  compare and hash equal to an old-style instance of the same name. This is the
-  migration mechanism: `Domain` dicts, offset-provider lookups and
-  `FieldType.dims` comparisons work across both styles, so subsystems — and
-  downstream code such as icon4py — migrate dimension by dimension.
 
 ## The extension point
 
