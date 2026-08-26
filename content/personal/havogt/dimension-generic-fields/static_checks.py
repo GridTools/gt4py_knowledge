@@ -28,6 +28,7 @@ from typed_dimensions import (
     Dual,
     Field,
     Staggered,
+    dual,
     dual_operator,
 )
 from typing_extensions import TypeVarTuple, Unpack, assert_type
@@ -54,12 +55,13 @@ Ihalf: TypeAlias = Staggered[I]
 def connectivity_types() -> None:
     assert_type(I + 1, Connectivity[I, I])
     assert_type(I - 2, Connectivity[I, I])
-    # half-integral offsets move to the dual grid ...
-    assert_type(I + 1 / 2, Connectivity[Staggered[I], I])
-    assert_type(I - 1 / 2, Connectivity[Staggered[I], I])
+    # A shift names the dimension the *result* lives on, so naming a staggered
+    # dimension consumes an unstaggered field ...
+    assert_type(Staggered[I] + 1 / 2, Connectivity[Staggered[I], I])
+    assert_type(Staggered[I] - 3 / 2, Connectivity[Staggered[I], I])
     # ... and back (involution: never `Staggered[Staggered[I]]`)
-    assert_type(Staggered[I] + 1 / 2, Connectivity[I, Staggered[I]])
-    assert_type(Staggered[I] - 3 / 2, Connectivity[I, Staggered[I]])
+    assert_type(I + 1 / 2, Connectivity[I, Staggered[I]])
+    assert_type(I - 1 / 2, Connectivity[I, Staggered[I]])
     # integer offsets on a staggered dimension stay on the staggered grid
     assert_type(Staggered[I] + 1, Connectivity[Staggered[I], Staggered[I]])
 
@@ -68,11 +70,11 @@ def connectivity_types() -> None:
 
 
 def staggering_roundtrip(a: Field[Dims[I], float]) -> None:
-    b = a(I + 1 / 2)
+    b = a(Staggered[I] + 1 / 2)
     assert_type(b, Field[Dims[Staggered[I]], float])
     b_via_alias: Field[Dims[Ihalf], float] = b  # the alias spelling is the same type
 
-    c = b(Staggered[I] + 1 / 2)
+    c = b(I + 1 / 2)
     assert_type(c, Field[Dims[I], float])
 
     # ordinary shifts do not change the dimensions
@@ -87,16 +89,16 @@ def staggering_roundtrip(a: Field[Dims[I], float]) -> None:
 
 def rank2_substitution(uv: Field[Dims[I, J], float]) -> None:
     assert_type(uv(I + 1), Field[Dims[I, J], float])
-    assert_type(uv(J + 1 / 2), Field[Dims[I, Staggered[J]], float])
-    assert_type(uv(I - 1 / 2), Field[Dims[Staggered[I], J], float])
+    assert_type(uv(Staggered[J] + 1 / 2), Field[Dims[I, Staggered[J]], float])
+    assert_type(uv(Staggered[I] - 1 / 2), Field[Dims[Staggered[I], J], float])
 
 
 def rank3_substitution(w: Field[Dims[I, J, K], float]) -> None:
-    assert_type(w(K + 1 / 2), Field[Dims[I, J, Staggered[K]], float])
+    assert_type(w(Staggered[K] + 1 / 2), Field[Dims[I, J, Staggered[K]], float])
     assert_type(w(J + 2), Field[Dims[I, J, K], float])
     # chaining: stagger in I, then in K
     assert_type(
-        w(I + 1 / 2)(K - 1 / 2),
+        w(Staggered[I] + 1 / 2)(Staggered[K] - 1 / 2),
         Field[Dims[Staggered[I], J, Staggered[K]], float],
     )
 
@@ -106,7 +108,7 @@ def rank3_substitution(w: Field[Dims[I, J, K], float]) -> None:
 
 def gradient_to_staggered(p: Field[Dims[I, J], float]) -> Field[Dims[Staggered[I], J], float]:
     """Pressure gradient at the staggered (velocity) points."""
-    return p(I + 1 / 2) - p(I - 1 / 2)
+    return p(Staggered[I] + 1 / 2) - p(Staggered[I] - 1 / 2)
 
 
 # --- Dimension-generic operators ---------------------------------------------
@@ -125,7 +127,9 @@ def to_staggered(
     f: Field[Dims[DimT], float], dim: type[DimT]
 ) -> Field[Dims[Staggered[DimT]], float]:
     """Staggering an operator that is *generic* in the dimension it staggers."""
-    return f(dim + 1 / 2)
+    # The shift names the *result* grid, which here is the dual of `dim`;
+    # `dual` is the typed counterpart of gt4py's `flip_staggered`.
+    return f(dual(dim) + 1 / 2)
 
 
 def use_generic_operators(
@@ -154,8 +158,8 @@ def avg_explicit(f: Field[Dims[DimT], float]) -> Field[Dims[Staggered[DimT]], fl
 def avg_explicit(f: Field[Any, float]) -> Field[Any, float]:
     # The body is dual-generic, so the dimension is only known as "the field's
     # dimension"; recover it at runtime (`Any`: precision lives in the overloads).
-    dim: Any = f.dims[0]
-    return f(dim - 1 / 2) + f(dim + 1 / 2)
+    to: Any = dual(f.dims[0])
+    return f(to - 1 / 2) + f(to + 1 / 2)
 
 
 # (2) declarative: ONE natural signature with the `Dual[X]` marker; the overload
@@ -167,8 +171,8 @@ AnyDimT = TypeVar("AnyDimT", bound=DimensionBase)  # ranges over staggered dims 
 
 @dual_operator
 def avg(f: Field[Dims[AnyDimT], float]) -> Field[Dims[Dual[AnyDimT]], float]:
-    dim: Any = f.dims[0]
-    return f(dim - 1 / 2) + f(dim + 1 / 2)
+    to: Any = dual(f.dims[0])
+    return f(to - 1 / 2) + f(to + 1 / 2)
 
 
 # `Dual[X]` also works in *parameter* positions, e.g. a weight that already
@@ -179,8 +183,8 @@ def avg(f: Field[Dims[AnyDimT], float]) -> Field[Dims[Dual[AnyDimT]], float]:
 def weighted_avg(
     a: Field[Dims[AnyDimT], float], weight: Field[Dims[Dual[AnyDimT]], float]
 ) -> Field[Dims[Dual[AnyDimT]], float]:
-    dim: Any = a.dims[0]
-    return weight * (a(dim + 1 / 2) + a(dim - 1 / 2))
+    to: Any = dual(a.dims[0])
+    return weight * (a(to + 1 / 2) + a(to - 1 / 2))
 
 
 def use_avg(a: Field[Dims[I], float], b: Field[Dims[Staggered[I]], float]) -> None:

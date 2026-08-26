@@ -84,9 +84,9 @@ def test_staggering_is_an_involution_at_the_type_constructor_level():
 def test_connectivity_construction():
     conn = I + 1
     assert (conn.domain_dim, conn.codomain, conn.offset) == (I, I, 1)
-    conn = I + 1 / 2
+    conn = Staggered[I] + 1 / 2
     assert (conn.domain_dim, conn.codomain, conn.offset) == (Staggered[I], I, 0.5)
-    conn = Staggered[I] - 1 / 2
+    conn = I - 1 / 2
     assert (conn.domain_dim, conn.codomain, conn.offset) == (I, Staggered[I], -0.5)
     with pytest.raises(ValueError, match="half-integral"):
         I + 0.7  # statically a (claimed) staggering shift; rejected at runtime
@@ -108,11 +108,13 @@ def test_plain_shift():
 
 def test_staggering_relabels_and_shifts():
     a = make_ifield([0.0, 1.0, 2.0, 3.0])
-    b = a(I + 1 / 2)  # b[i] = a at position i + 1/2, i.e. a[i + 1] in index space
+    # the point of `b` at index i sits at position i - 1/2 and reads a half a
+    # cell up, i.e. a[i] in index space
+    b = a(Staggered[I] + 1 / 2)
     assert b.dimensions == (Staggered[I],)
-    np.testing.assert_array_equal(b.ndarray, [1.0, 2.0, 3.0, 0.0])
+    np.testing.assert_array_equal(b.ndarray, [0.0, 1.0, 2.0, 3.0])
 
-    c = b(Staggered[I] + 1 / 2)  # back to the unstaggered grid
+    c = b(I + 1 / 2)  # back to the unstaggered grid
     assert c.dimensions == (I,)
     # two +1/2 staggerings == one full shift
     np.testing.assert_array_equal(c.ndarray, a(I + 1).ndarray)
@@ -120,37 +122,37 @@ def test_staggering_relabels_and_shifts():
 
 def test_staggering_roundtrip_identity():
     a = make_ifield([0.0, 1.0, 2.0, 3.0])
-    back = a(I + 1 / 2)(Staggered[I] - 1 / 2)
+    back = a(Staggered[I] + 1 / 2)(I - 1 / 2)
     assert back.dimensions == (I,)
     np.testing.assert_array_equal(back.ndarray, a.ndarray)
 
 
 def avg(f: NdField) -> NdField:
     """Runtime twin of the dual-generic `avg` in `static_checks.py` (one body, both grids)."""
-    (dim,) = f.dims
-    return f(dim - 1 / 2) + f(dim + 1 / 2)
+    to = dual(f.dims[0])  # a shift names the result grid: the dual of the field's
+    return f(to - 1 / 2) + f(to + 1 / 2)
 
 
 def test_avg_to_staggered():
     a = make_ifield([0.0, 1.0, 2.0, 3.0])
     result = avg(a)
     assert result.dimensions == (Staggered[I],)
-    # at staggered point i+1/2: a[i] + a[i+1] (periodic)
-    np.testing.assert_array_equal(result.ndarray, [1.0, 3.0, 5.0, 3.0])
+    # at staggered point i (position i-1/2): a[i-1] + a[i] (periodic)
+    np.testing.assert_array_equal(result.ndarray, [3.0, 1.0, 3.0, 5.0])
 
 
 def test_avg_from_staggered():
     g = NdField((Staggered[I],), np.asarray([0.0, 1.0, 2.0, 3.0]))
     result = avg(g)
     assert result.dimensions == (I,)
-    # at unstaggered point i: g[i-1] + g[i] (the staggered neighbors at i -+ 1/2)
-    np.testing.assert_array_equal(result.ndarray, [3.0, 1.0, 3.0, 5.0])
+    # at unstaggered point i: g[i] + g[i+1] (the staggered neighbors at i -+ 1/2)
+    np.testing.assert_array_equal(result.ndarray, [1.0, 3.0, 5.0, 3.0])
 
 
 def weighted_avg(a: NdField, w: NdField) -> NdField:
     """Runtime twin of the dual-generic `weighted_avg` in `static_checks.py`."""
-    (dim,) = a.dims
-    return w * (a(dim + 1 / 2) + a(dim - 1 / 2))
+    to = dual(a.dims[0])
+    return w * (a(to + 1 / 2) + a(to - 1 / 2))
 
 
 def test_weighted_avg():
@@ -158,8 +160,8 @@ def test_weighted_avg():
     w = NdField((Staggered[I],), np.asarray([1.0, 2.0, 3.0, 4.0]))
     result = weighted_avg(a, w)
     assert result.dimensions == (Staggered[I],)
-    # at staggered point i+1/2: w[i] * (a[i+1] + a[i]) (periodic)
-    np.testing.assert_array_equal(result.ndarray, [1.0, 6.0, 15.0, 12.0])
+    # at staggered point i (position i-1/2): w[i] * (a[i] + a[i-1]) (periodic)
+    np.testing.assert_array_equal(result.ndarray, [3.0, 2.0, 9.0, 20.0])
 
     back = weighted_avg(result, a)
     assert back.dimensions == (I,)
@@ -173,21 +175,21 @@ def test_avg_roundtrip_dims():
 
 def test_c_grid_gradient():
     a = make_ifield([0.0, 1.0, 4.0, 9.0])
-    grad = a(I + 1 / 2) - a(I - 1 / 2)  # grad[i+1/2] = a[i+1] - a[i]
+    grad = a(Staggered[I] + 1 / 2) - a(Staggered[I] - 1 / 2)  # grad[i] = a[i] - a[i-1]
     assert grad.dimensions == (Staggered[I],)
-    np.testing.assert_array_equal(grad.ndarray, [1.0, 3.0, 5.0, -9.0])
+    np.testing.assert_array_equal(grad.ndarray, [-9.0, 1.0, 3.0, 5.0])
 
 
 def test_rank2_substitution_at_runtime():
     a = NdField((I, J), np.zeros((3, 4)))
-    assert a(J + 1 / 2).dimensions == (I, Staggered[J])
-    assert a(I - 1 / 2).dimensions == (Staggered[I], J)
+    assert a(Staggered[J] + 1 / 2).dimensions == (I, Staggered[J])
+    assert a(Staggered[I] - 1 / 2).dimensions == (Staggered[I], J)
 
 
 def test_mixing_dual_grids_raises():
     a = make_ifield([0.0, 1.0])
     with pytest.raises(ValueError, match="different domains"):
-        a + a(I + 1 / 2)
+        a + a(Staggered[I] + 1 / 2)
 
 
 def test_shift_along_missing_dimension_raises():

@@ -18,7 +18,7 @@ status: proposed
 > **Prototype**: mypy-verified, vendored under
 > [[personal/havogt/dimension-generic-fields|Generic dimensions and statically
 > typed staggering]] (`dimension-generic-fields/typed_dimensions.py`,
-> `static_checks.py`, `static_errors.py`, `test_typed_dimensions.py`; mypy 1.19,
+> `static_checks.py`, `static_errors.py`, `test_typed_dimensions.py`; mypy 2.3,
 > no plugin). That document is the wider investigation this one is extracted
 > from; everything beyond Part I stays there.
 
@@ -155,9 +155,10 @@ Each step is landable separately, with name-based equality carrying the interop:
 1. **The metaclass-overload mypy quirk.** mypy rejects generic self-types on
    metaclass methods at the *definition* site but applies them correctly at every
    *call* site, so the operator overloads carry `# type: ignore[misc]`, pinned by
-   `static_checks.py`. **pyright is untested and must be checked before
-   committing** — the checker-agnostic fallback is free functions (`shift(I, 1)`),
-   which changes notation but not the design.
+   `static_checks.py`. Re-verified on mypy 2.3 (2026-08-05): both the quirk and
+   the suppression still behave as described. **pyright is untested and must be
+   checked before committing** — the checker-agnostic fallback is free functions
+   (`shift(I, 1)`), which changes notation but not the design.
 2. **eve serialization of dimension classes** inside IR nodes: dataclass
    instances serialize structurally today; classes need a `value`/`kind`-based
    representation. Straightforward, since both are class attributes — but it is

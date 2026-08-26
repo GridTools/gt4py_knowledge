@@ -14,6 +14,11 @@ Thumbs.db
 *.swo
 *~
 
+# Python (prototypes vendored next to proposals are runnable)
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Quartz local preview artifacts (build happens in CI from a cloned Quartz)
 public/
 .quartz-cache/
