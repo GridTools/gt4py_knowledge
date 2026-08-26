@@ -80,9 +80,15 @@ class DimensionMeta(type):
     def __repr__(cls) -> str:
         return f"{cls.value}[{cls.kind.value}]"
 
-    # Name-based equality mirrors today's `Dimension.__eq__` (which only
-    # compares `value`) and makes dimension classes interoperate with legacy
+    # Name-based equality makes dimension classes interoperate with legacy
     # `Dimension` instances during a migration period.
+    #
+    # NOTE: this is *not* what shipped `common.Dimension` does — its `__eq__`
+    # compares `value` **and** `kind`, and its dataclass-generated `__hash__`
+    # covers both, so `Dimension("I")` and `Dimension("I", VERTICAL)` are neither
+    # equal nor hash-equal. The prototype ignores `kind` because it only ever
+    # declares horizontal dimensions; a real implementation must include it (see
+    # `shared/dimensions-as-types`, "Design").
     def __eq__(cls, other: object) -> bool:
         if isinstance(other, DimensionMeta) or type(other).__name__ == "Dimension":
             return cls.value == other.value  # type: ignore[attr-defined]
