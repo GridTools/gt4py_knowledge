@@ -15,6 +15,7 @@ index current. (Keep entries and their keywords in sync with each document's `ta
 Proposals the group broadly agrees are implementation-ready.
 
 - [[shared/external-memory-for-dace-arrays/external-memory-for-dace-arrays|External workspace memory for DaCe temporary arrays]] — keywords: dace, backend, gpu, memory, temporary-arrays, workspace, cuda, hip, mempool, persistent, external, allocation, icon4py, performance
+- [[shared/dimensions-as-types|Dimensions as types]] — keywords: type-system, dimensions, type-checking, mypy, mypy-plugin, pyright, nominal-types, metaclass, migration, serialization, frontend, foast, extension-point
 
 <!-- Entry format:
 - [[shared/<slug>|Title]] — keywords: keyword1, keyword2, keyword3
