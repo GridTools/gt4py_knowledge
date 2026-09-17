@@ -56,7 +56,7 @@ offset/connectivity vocabulary, grouped by layer.
 
 | Concept                                           | Where                          | Role                                                                       |
 | ------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------- |
-| `Tag = str`                                       | `common.py:63`                 | the alias that makes every name space stringly-typed                       |
+| `Tag = str`                                       | `common.py:62`                 | the alias that makes every name space stringly-typed                       |
 | `DimensionKind`                                   | `common.py:66-72`              | `HORIZONTAL` / `VERTICAL` / `LOCAL`                                        |
 | `Dimension`                                       | `common.py:79-81`              | `(value: str, kind)`; `__add__`/`__sub__` build Cartesian shifts           |
 | `UnitRange`, `NamedRange`, `NamedIndex`, `Domain` | `common.py:196, 358, 369, 432` | index-space vocabulary; `Domain.dims` is where local dims appear on fields |
@@ -90,8 +90,8 @@ Constructors: `constructors.as_connectivity`, plus the `_field` / `_connectivity
 
 | Concept                                                                  | Where                 |
 | ------------------------------------------------------------------------ | --------------------- |
-| `OffsetProvider = Mapping[Tag, NeighborTable]`                           | `common.py:1177`      |
-| `OffsetProviderType = Mapping[Tag, NeighborConnectivityType]`            | `common.py:1178`      |
+| `OffsetProvider = Mapping[Tag, NeighborTable]`                           | `common.py:1176`      |
+| `OffsetProviderType = Mapping[Tag, NeighborConnectivityType]`            | `common.py:1177`      |
 | `OffsetProviderElem`, `OffsetProviderTypeElem`                           | `common.py:1172-1173` |
 | `get_offset`, `get_offset_type`, `has_offset`, `offset_provider_to_type` | `common.py:1193-1221` |
 
@@ -158,7 +158,7 @@ frontend. The concept is represented as Field with local Dimension."*
 
 | Kind                                       | Count | Notes                                                                                                                  |
 | ------------------------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------- |
-| Runtime connectivity classes               | 8     | 3 are array-library variants of one; 1 is incomplete                                                                   |
+| Runtime connectivity classes               | 8 (+2 `Protocol`s)     | the L1 table has 10 rows: `Connectivity` and `NeighborTable` are protocols; 3 rows are array-library variants of one class; 1 is incomplete                                                                   |
 | Connectivity type classes                  | 2     |                                                                                                                        |
 | Declaration classes                        | 2     | the subclassing is flagged as a conceptual mismatch at `fbuiltins.py:467`                                              |
 | Type-system representations of "an offset" | 5     | `ts.OffsetType`, `it_ts.OffsetLiteralType`, `it_ts.CartesianOffsetType`, `ts.ListType.offset_type`, `ts.DimensionType` |
@@ -355,7 +355,7 @@ retains it only because the neighbor table data must be supplied at runtime.
 
 | #       | Constraint                                                                   | Embedded (field) | Embedded (iterator) | IR / type system | GTFN             | DaCe         | Enforced?                     | Source                                                                                       |
 | ------- | ---------------------------------------------------------------------------- | ---------------- | ------------------- | ---------------- | ---------------- | ------------ | ----------------------------- | -------------------------------------------------------------------------------------------- |
-| **A1**  | `FieldOffset.value` (N1) == provider key (N4)                                | required         | required            | —                | —                | —            | `KeyError`                    | `fbuiltins.py:494, 508`; `common.py:1207-1208`                                               |
+| **A1**  | `FieldOffset.value` (N1) == provider key (N4)                                | required         | required            | —                | —                | —            | `KeyError`                    | `fbuiltins.py:494, 509`; `common.py:1207-1208`                                               |
 | **A2**  | Python var name (N2) == provider key (N4)                                    | —                | —                   | required         | required         | required     | silent; `KeyError` at runtime | `foast_to_gtir.py:305, 331`                                                                  |
 | **A3**  | local dim `.value` (N3) == provider key (N4), **reductions**                 | required         | required            | required         | required         | required     | `KeyError`                    | `nd_array_field.py:981-985`; `embedded.py:953, 1517, 1776`; `unroll_reduce.py:43-50, 61-65`  |
 | **A4**  | local dim `.value` (N3) == provider key (N4), **sparse field args**          | —                | —                   | —                | required         | required     | `assert` / `ValueError`       | `gtfn_module.py:88-98`; `gtir_to_sdfg.py:572-585, 838-842`; `gtir_to_sdfg_lambda.py:766-770` |
@@ -459,10 +459,10 @@ The DaCe "inconsistent" entry: `gtir_to_sdfg_lambda.py:1155` builds
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | **F1** | `_Staggered` is a **reserved prefix**: any `Dimension` whose `value` starts with it is treated as staggered                             | `common.py:1444-1464` (`_STAGGERED_PREFIX = "_Staggered"`)                  |
 | **F2** | GTFN aliases every staggered tag to its base tag by string surgery                                                                      | `itir_to_gtfn_ir.py:703`, `_add_staggered_aliases:204-215`                  |
-| **F3** | `_CONST_DIM` is a reserved LOCAL dimension name, deliberately *absent* from the provider and special-cased at every lookup              | `embedded.py:220, 572, 1513, 1768`; `gtir_to_sdfg_lambda.py:62, 1314, 1355` |
+| **F3** | `_CONST_DIM` is a reserved LOCAL dimension name, deliberately *absent* from the provider and special-cased at every lookup (12 use sites)              | defined `embedded.py:220`, `gtir_to_sdfg_lambda.py:62`; used `embedded.py:571, 1009, 1431, 1513, 1768, 1770`; `gtir_to_sdfg_lambda.py:595, 1142, 1314, 1355, 1386, 1682` |
 | **F4** | **Dimension names determine memory layout** — `order_dimensions` sorts by `(kind, as_non_staggered(dim).value)`                         | `common.py:1334-1344`                                                       |
 | **F5** | GTFN: every dim name and provider key becomes a C++ type `generated::<name>_t`, so it must be a valid C++ identifier and collision-free | `gtfn_module.py:97, 130-136`                                                |
-| **F6** | GTFN connectivity params: `gt_conn_<key.lower()>`, so keys must not collide **case-insensitively**                                      | `gtfn_module.py:32, 120, 133`                                               |
+| **F6** | GTFN connectivity params: `gt_conn_<key.lower()>`, so keys must not collide **case-insensitively**                                      | `gtfn_module.py:32, 118, 132`                                               |
 | **F7** | DaCe connectivity arrays: `gt_conn_<key>`, recovered by regex `^gt_conn_(\S+)$`                                                         | `sdfg_args.py:24-25, 56-70`                                                 |
 | **F8** | DaCe map variables: `i_<dim>_gtx_<kind>[dim]`; map fusion/splitting transformations **rely on these strings matching**                  | `gtir_to_sdfg_utils.py:44-54`                                               |
 | **F9** | DaCe field symbols: `__<field>_<dim.value>_size/stride`, `_range_symbol_name(field, dim.value)`                                         | `sdfg_args.py:73-82, 119-122`                                               |
