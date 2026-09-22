@@ -12,7 +12,7 @@ status: draft
 > `gt4py.next`, across the embedded, IR and backend contexts. It documents the
 > implementation as it is; the proposal it supports is in the main note.
 
-Line references are against gt4py `main` at `b3c53fa7e` (v1.2.2, 2026-09-03);
+Line references are against gt4py `main` at `b3c53fa7e` (v1.2.2, 2026-09-03), i.e. the tree *before* the implementation (see the main note's Implementation section); this catalogue is a historical record;
 paths are relative to `src/gt4py/next/` unless they start with `tests/`.
 
 Related gt4py records:

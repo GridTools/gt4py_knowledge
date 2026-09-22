@@ -1,8 +1,9 @@
 ---
 title: "Connectivities as types: one declaration for offset, local dimension and provider key"
 author: egparedes
-tags: [type-system, type-checking, dimensions, local-dimensions, connectivities, offset-provider, unstructured, neighbor-sum, reduction, frontend, foast, gtir, embedded, gtfn, dace, nominal-types, metaclass, serialization, fingerprint, staggering, migration, adr, tech-debt]
+tags: [type-system, type-checking, dimensions, local-dimensions, connectivities, offset-provider, unstructured, neighbor-sum, reduction, frontend, foast, gtir, embedded, gtfn, dace, nominal-types, metaclass, serialization, fingerprint, staggering, migration, adr, tech-debt, shared-local-dimensions, implemented]
 created: 2026-09-17
+updated: 2026-09-22
 status: draft
 ---
 
@@ -23,10 +24,18 @@ status: draft
 > program(a, out=out, offset_provider={V2E: v2e_table})
 > ```
 >
-> `FieldOffset`, `ts.OffsetType`, the string-keyed `OffsetProvider` and the
-> `V2EDim`-next-to-`V2E` naming convention disappear. Of the ten cross-object
-> identity constraints in the current tree, five (A1–A5) dissolve by
-> construction and three (A6–A8) collapse into a single bind-time check.
+> `FieldOffset`, the string-keyed provider *API* and the `V2EDim`-next-to-`V2E`
+> naming convention disappear. Of the ten cross-object identity constraints in
+> the current tree, five (A1–A5) dissolve by construction and three (A6–A8)
+> collapse into a single bind-time check.
+
+> **Implementation status (2026-09-22).** Implemented as the stacked
+> GridTools/gt4py PRs listed in [Implementation](#implementation), with
+> ADR 0028 (dimensions as nominal types) and ADR 0029 (connectivities as
+> types). The sections below describe the design **as implemented**; where
+> the implementation had to depart from the original proposal, the text was
+> corrected and the departure is listed in
+> [Where the implementation departs](#where-the-implementation-departs-from-the-original-proposal).
 
 > **Status**: draft, AI-assisted. Derived from a full audit of the gt4py tree
 > at `b3c53fa7e` (v1.2.2, 2026-09-03); every `file:line` reference was
@@ -139,97 +148,106 @@ what is one idea — *a mapping between two index spaces, plus a name for it*.
 
 ## Proposal
 
-### Five concepts
+### Four concepts
 
 | Concept | Role | Replaces |
 | --- | --- | --- |
-| `DimensionBaseIndex` | root of all dimension types; `value` is the index position | the `DimensionBase` root [[shared/dimensions-as-types|dimensions as types]] deferred |
-| `DimensionIndex` | user-declarable primary dimension (as in #2844) | `Dimension` instances |
-| `LocalDimensionIndex` | a local dimension: either **owned**, declared nested in its connectivity, or **owner-less** with a fixed `size`; carries `max_neighbors` / `min_neighbors` when they are known statically | `Dimension(..., kind=LOCAL)`, `_CONST_DIM`, and `NeighborConnectivityType.max_neighbors` / `skip_value` |
-| `NeighborConnectivity[Origin, Codomain]` | the connectivity **class**: type, shift handle and provider key in one object; contains its `Local` | `FieldOffset`, `runtime.Offset`, `ts.OffsetType`, the `V2EDim` convention |
-| `MultiDimensionIndex[D, *Ls]` | position in the product of a primary and one or more local dimensions | untyped position dicts keyed by name strings |
+| `DimensionIndex` | a dimension is a subclass, an index along it an instance (ADR 0028) | `Dimension` instances |
+| `LocalDimensionIndex(DimensionIndex)` | a local dimension: **owned** (declared nested in, or adopted by, its connectivity), or **owner-less** with a fixed `size`; carries `max_neighbors` / `min_neighbors` when declared | `Dimension(..., kind=LOCAL)`, `_CONST_DIM` (now `ConstList`) |
+| `NeighborConnectivity[Origin, Codomain]` | the connectivity **declaration**: shift handle in DSL code and provider key; contains its `Local`; never instantiated, and **not** a `Connectivity` | `FieldOffset`, the `V2EDim` convention |
+| `MultiDimensionIndex[D, *Ls]` | a position in the product of a primary and local dimensions, a tuple of indices | untyped position dicts keyed by name strings |
 
-`Connectivity` (the runtime protocol), `CartesianConnectivity`,
-`NeighborTable` / `NdArrayConnectivityField` (the data) and
-`NeighborConnectivityType` (the compile-time record) all **stay**. What
-changes is that the compile-time record is *produced by* the class instead
-of being authored in parallel with it.
+The originally proposed `DimensionBaseIndex` root was dropped: `Dimension` is
+`type[DimensionIndex]` and eve validates `type[X]` by `issubclass`, so a sibling
+root would have forced every `type[DimensionIndex]` annotation in the tree to
+widen and then admit local dimensions everywhere anyway. The tree already tells
+local dimensions apart by a runtime `kind` check, and keeps doing so.
 
-### Sketch
+`Connectivity` (the runtime data protocol), `CartesianConnectivity`,
+`NeighborTable` / `NdArrayConnectivityField` (the data),
+`NeighborConnectivityType` (the compile-time record) and `ts.OffsetType` (the
+DSL type of a declaration) all **stay**. What changes is that they are
+*produced by* or *checked against* the class instead of being authored in
+parallel with it.
+
+### Sketch (as implemented)
 
 ```python
-# ── dimensions ─────────────────────────────────────────────────────────────
+# ── dimensions (ADR 0028) ─────────────────────────────────────────────────
 class DimensionMeta(type):
     @property
     def tag(cls) -> Tag:                       # identity, and the IR spelling
         return f"{cls.__module__}.{cls.__qualname__}"
     kind: DimensionKind
-    # __eq__/__hash__: default type identity. No registry, no copyreg.
+    __hash__ = type.__hash__                   # __eq__ stays for `I == 5` -> Domain
 
 
-class DimensionBaseIndex[T](metaclass=DimensionMeta):
-    value: T
+class DimensionIndex(metaclass=DimensionMeta):
+    value: int                                 # an index along the dimension
+
+type Dimension = type[DimensionIndex]          # PEP 695: `Dimension("I")` is not callable
 
 
-class DimensionIndex(DimensionBaseIndex[int]): ...                  # user-declarable
+class LocalDimensionIndex(DimensionIndex):     # kind is LOCAL; `kind=LOCAL` elsewhere is an error
+    owner: ClassVar[type[NeighborConnectivity] | None]   # None: owner-less
+    max_neighbors: ClassVar[int | None]
+    min_neighbors: ClassVar[int | None]        # min == max  <=>  no skip values
+    def __init_subclass__(cls, *, size: int | None = None): ...
 
 
-class LocalDimensionIndex(DimensionBaseIndex[int]):
-    kind = DimensionKind.LOCAL
-    owner: ClassVar[type[NeighborConnectivity] | None]   # None: owner-less, fixed extent
-    max_neighbors: ClassVar[int | None]    # None: completed at bind time
-    min_neighbors: ClassVar[int | None]    # min == max  <=>  no skip values
+class MultiDimensionIndex[D: DimensionIndex, *Ls](tuple[D, *Ls]): ...   # shape checked at runtime
 
-    def __init_subclass__(cls, *, size: int | None = None): ...   # owner-less form
+Staggered[KDim]                                # an interned, real dimension class (ADR 0026)
 
 
-class MultiDimensionIndex[D: DimensionIndex, *Ls](DimensionBaseIndex[tuple[D, *Ls]]):
-    """Position in the product of a primary dimension and its local dimensions."""
-    value: tuple[D, *Ls]                   # *Ls checked at runtime to be LocalDimensionIndex
-
-
-class Staggered[D: DimensionIndex](DimensionBaseIndex[int]): ...    # replaces the _Staggered prefix
-
-
-# ── connectivities ─────────────────────────────────────────────────────────
-class Connectivity[Src, Dst]: ...   # Protocol; parametrization changes, see Open Q6
-
-class CartesianConnectivity[D: DimensionIndex](Connectivity[D, D]): ...   # semantics unchanged
+# ── connectivities (ADR 0029) ─────────────────────────────────────────────
+class ConnectivityMeta(type):
+    tag: Tag                                   # the declaration's qualified name
+    offset_tag: Tag                            # how the IR names it, see "Identity"
+    def __call__(cls, *a, **kw) -> NoReturn: ...        # no instances
+    def __getitem__(cls, item): ...            # V2E[1] in embedded; NC[V, E] forwarded
+    def __gt_type__(cls) -> ts.OffsetType: ...  # Codomain -> (Origin, Local), tag=offset_tag
 
 
 class NeighborConnectivity[Origin: DimensionIndex, Codomain: DimensionIndex](
-    Connectivity[MultiDimensionIndex[Origin, LocalDimensionIndex], Codomain],
-    metaclass=ConnectivityMeta,
+    metaclass=ConnectivityMeta
 ):
-    Local: type[LocalDimensionIndex]   # MUST be declared nested by every subclass (see below)
+    Local: ClassVar[type[LocalDimensionIndex]]   # annotation only; every subclass declares it
+    def __init_subclass__(cls, *, max_neighbors=None, min_neighbors=None): ...
 
-    def __init_subclass__(
-        cls, *, max_neighbors: int | None = None, min_neighbors: int | None = None
-    ): ...   # verifies `cls.Local` exists and is a LocalDimensionIndex; sets Local.owner = cls
-    # ConnectivityMeta provides: tag (qualified name), __gt_type__() -> NeighborConnectivityType
-    # (complete only once the counts are known), __getitem__ so that V2E[1] is a
-    # single-neighbor Connectivity, default type identity.
+
+def check_neighbor_table(connectivity, table_or_type) -> None: ...   # A6–A8 as one check
 
 
 # ── user code ──────────────────────────────────────────────────────────────
 class V(DimensionIndex): ...
 class E(DimensionIndex): ...
+class C(DimensionIndex): ...
+class CE(DimensionIndex): ...                  # flattened (cell, edge-of-cell) pairs
 
 
 class V2E(NeighborConnectivity[V, E], max_neighbors=6, min_neighbors=5):   # counts optional
     class Local(LocalDimensionIndex): ...                            # explicit, always
 
 
+class C2E(NeighborConnectivity[C, E]):
+    class Local(LocalDimensionIndex): ...
+
+
+class C2CE(NeighborConnectivity[C, CE]):       # a flattened sparse pattern:
+    Local = C2E.Local                          # shares C2E's neighbor axis
+
+
 class LsqUnk(LocalDimensionIndex, size=3): ...                       # owner-less local axis
-class ConstList(LocalDimensionIndex, size=1): ...                    # replaces _CONST_DIM
 
 
 @field_operator
 def op(a: Field[Dims[E], float]) -> Field[Dims[V], float]:
-    return neighbor_sum(a(V2E), axis=V2E.Local)                      # local axis stays explicit
+    return neighbor_sum(a(V2E), axis=V2E.Local) + a(V2E[0])
 
 
 program(a, out=out, offset_provider={V2E: v2e_table})
+a(as_offset(KDim, k_offsets))                 # was as_offset(Koff, ...)
 ```
 
 Vocabulary: `Origin` is the dimension the remapped field lives on
@@ -251,98 +269,82 @@ The position taken here: *existing tests that redeclare dummy dimensions can
 be fixed in other ways; they should not constrain the design of the
 concepts.* The consequences, stated as rules:
 
-1. **Reconstruction from the IR is an import.** `dimension(tag, kind)` is
-   replaced by `resolve(tag)`: `importlib.import_module(module)` then walk
-   the `qualname` (nested classes like `V2E.Local` resolve naturally). The
-   IR references a Python type exactly the way `pickle` references a class.
-   `AxisLiteral.kind` becomes redundant, which the `TODO` at
-   `iterator/ir.py:93` has wanted since the beginning. Parametrized types
-   (`Staggered[D]`, rule 6) have no importable `qualname`; their tag needs a
-   small grammar (`<qualname>[<tag>]`) and `resolve` must parse it and
-   materialize the class — the one place where "resolution is an import"
-   is not literally true.
-2. **Types reaching the IR must be importable.** An early heuristic at class
-   creation catches the common mistake:
-
-   ```python
-   def __init_subclass__(cls, **kw):
-       if "<locals>" in cls.__qualname__:
-           raise TypeError(f"'{cls.__qualname__}' must be declared at module level.")
-   ```
-
-   It is neither necessary nor sufficient — `type("Dyn", ...)` inside a
-   function passes, a class `del`'d after creation passes — so the
-   authoritative check remains pickle's own `save_global` at pickle time,
-   exactly as for any class. The `spawn`-based compile workers of
-   `otf/runners.py` re-execute the main script as `__mp_main__`, so classes
-   declared in a *file's* `__main__` resolve there (provided the script has
-   an `if __name__ == "__main__":` guard, which the pool already requires).
-   What does not resolve is *interactive* `__main__`: the REPL, notebooks,
-   `python -c`. Documented limitation, not fixed.
-3. **No registry, no `copyreg`.** Classes pickle by reference, which is
-   correct for module-level types; #2844's `copyreg.pickle(DimensionMeta, ...)`
-   and `_DIMENSION_REGISTRY` are removed again. Nothing equivalent creeps
-   back in, because string-keyed providers are not accepted at all (there is
-   no deprecation window), so no name→class table is ever needed.
-4. **Cache fingerprints depend on module paths.** #2844 adds a
-   `fingerprinting.py` deconstructor keyed on `(tag, kind)` (recorded in
-   ADR 0028) *specifically so that* a dimension is not fingerprinted by
-   qualified name. Under type identity it is, by definition; renaming a
-   module invalidates compiled artifacts (ADR 0023's cache). Correct for
-   this model; a consequence to record, not a reversal of ADR 0023 itself.
-5. **Codegen names need injective mangling.** `generated::<tag>_t` (gtfn) and
-   DaCe symbols cannot contain dots. One shared `codegen_name(tag)`, injective
-   (escape existing `__` before replacing `.`), used by both backends; gtfn's
-   existing `TagDefinition.alias` mechanism can shorten where needed.
-6. **Staggering comes into scope.** `flip_staggered` builds
-   `Dimension(f"_Staggered{name}")` from a string (`common.py:1452-1457`).
-   There is no such type to import, so ADR 0026's prefix cannot survive
-   type identity; `Staggered[D]` becomes a real parametrized dimension type.
-   This is the `DimensionBase` extension point named in
-   [[shared/dimensions-as-types|dimensions as types]], now with a concrete
-   requirement.
+1. **Reconstruction from the IR is an import.** `resolve(tag)` imports the
+   longest importable module prefix and walks the rest as attributes (nested
+   classes like `V2E.Local` resolve naturally), the way `pickle` references a
+   class. Only where the module path ends is memoized: the attribute walk is
+   repeated, so a declaration redefined under the same name (a re-run
+   notebook cell) resolves to the new class. `AxisLiteral` stores only the tag
+   and derives `kind` and `dim` from it (the `TODO` at `iterator/ir.py:93`);
+   printing IR never imports (`resolve_loaded`). `Staggered[D]` tags use the
+   small grammar `<owner tag>[<base tag>]`, resolved by subscripting the owner.
+2. **Types reaching the IR must be importable.** `<locals>` in a qualname is
+   rejected at class creation (for dimensions and connectivities); pickle's
+   own `save_global` stays the authoritative check. Interactive `__main__`
+   (REPL, notebooks, `python -c`) turned out to matter — every notebook
+   declares its dimensions there — so the compile runner detects a job that
+   references such a class and **compiles it in the calling process** instead
+   of failing in a spawn worker.
+3. **No registry.** Classes pickle by reference. One narrow `copyreg` hook
+   remains, for `Staggered[D]`, whose bracketed qualname `save_global` cannot
+   look up; it reduces to the base dimension and re-interns.
+4. **Fingerprints depend on qualified names.** Dimensions are fingerprinted by
+   reference; a connectivity declaration additionally by its dimensions and
+   counts, so a redefinition under the same name does not reuse artifacts.
+5. **Codegen names need injective mangling.** `codegen_name(tag)` is a prefix
+   escape — `_`→`_u`, `.`→`_d`, `[`→`_l`, `]`→`_r` — with inverse
+   `from_codegen_name`, used by gtfn, DaCe and the roundtrip backend. The first
+   draft's "escape `__` then replace `.`" was **not** injective (`".."` and
+   `"_"` collide); the prefix escape was verified exhaustively.
+6. **Staggering came into scope, and earlier than planned.**
+   `Staggered[D]` is an interning metaclass subscription producing a real
+   class (a PEP 695 generic would give a `typing` alias, which fails
+   `issubclass` and eve's `type[...]` validation). It had to land with the
+   dimension change itself, since the old `_Staggered` name prefix needs a
+   name→class registry.
+7. **The IR names a connectivity by its `offset_tag`.** That is its local
+   dimension's tag when it declares the local dimension: shifts, reductions
+   and sparse arguments then all find the table under **one** string, which
+   made the backends' A3/A4 lookups correct without touching them. A
+   connectivity *sharing* another one's local dimension is named by its own
+   tag, since the local tag already names the owner's table.
 
 ### Binding model
 
 The connectivity *type* conceptually depends on the *table*: two different
 tables assign different neighbors to the same origin element. The model:
 
-- The class `V2E` is a **type constructor**. Its static part — `Origin`,
+- The class `V2E` is a **declaration**. Its static part — `Origin`,
   `Codomain`, `Local`, and *optionally* `max_neighbors` / `min_neighbors` —
-  is what compilation sees. When the counts are declared, they are a
-  constraint the table must satisfy. When they are not, they are **completed
-  at bind time**: from the table's shape and skip value in the JIT flow, or
-  from a `NeighborConnectivityType` supplied through `connectivities=` in the
-  AOT flow (`ffront/decorator.py:188-208`), which already passes exactly that
-  record without any data. `NeighborConnectivityType` is derived from class
-  plus binding, and is complete only once both are known.
+  is what compilation sees. Declared counts are a constraint on the table;
+  undeclared ones are simply taken from the table (its
+  `NeighborConnectivityType`, which is part of the compile-cache key as
+  before). Nothing is written back to the class.
 - Why the counts are not static-only. Two in-tree and in-ICON facts: the
-  arity of the same connectivity varies per mesh (`fvm_nabla_setup.py:99`
-  sizes `V2E` from `edges_per_node`, computed from the atlas mesh), so a
-  static count binds the DSL source to one mesh family and makes
-  `Field[Dims[Vertex, V2E.Local]]` signatures unshareable across meshes; and
-  skip-value presence is *configuration*-dependent in ICON (`icon.py:130`:
-  pentagon offsets have skip values on the icosahedron but not on the torus;
-  boundary offsets only on limited-area or distributed grids), so a static
-  `min_neighbors` would force ICON4Py to either declare two classes per
-  boundary offset or always compile skip-mask handling, defeating its
-  `keep_skip_values=False` table rewrite (`base.py:180`). Declared counts
-  remain the right choice for fixed-arity meshes, and the compile cache is
-  unaffected either way: `NeighborConnectivityType` is part of the key today
-  and stays so.
-- A **bound connectivity** is the class plus a table. Within one program
-  invocation there is exactly one table per class, so every occurrence of
-  `V2E` in that invocation denotes the same mapping. The provider
+  arity of the same connectivity varies per mesh (`fvm_nabla_setup.py` sizes
+  `V2E` from the atlas mesh), and skip-value presence is
+  *configuration*-dependent in ICON (`icon.py:130`: pentagon offsets have skip
+  values on the icosahedron but not on the torus), so a static `min_neighbors`
+  would force duplicate classes or always-on skip handling.
+- A **bound connectivity** is the class plus a table; the provider
   `{V2E: table}` *is* the binding, and a dict makes one-table-per-class
   structural.
-- The table is validated against the static part **once, at bind time**:
-  shape `(n, max_neighbors)`, integral dtype, skip values present iff
-  `min_neighbors < max_neighbors`. This one runtime check replaces the whole
-  declaration-vs-provider family of constraints (A6–A8 in the appendix); they
-  do not vanish, they become a single validated invariant.
-- The class never holds data. `_ConnectivityFileRef` and the compile cache
-  (ADR 0023) keep working unchanged: the type part is fingerprinted by
-  qualified name, the table crosses process boundaries as it does today.
+- **Normalized at the entry points.** Every program entry point
+  (`Program.__call__`, `FieldOperator.__call__`, `compile`,
+  `CompilationOptions.connectivities`, `embedded.context.update`, the
+  iterator `fendef`, DaCe `get_sdfg_conn_args`) rewrites the provider to the
+  form the IR uses, keyed by `offset_tag`. Lowering, the backends and the
+  compiled-program cache keep seeing tag-keyed providers — like hand-written
+  IR — so the ~19 direct provider accesses in the backends did not change. A
+  bare string key such as `"V2E"` is rejected as the removed spelling.
+- **Validated once per compiled variant** (and on embedded calls):
+  `check_neighbor_table` checks the domain `(Origin, Local)`, the codomain,
+  an integral dtype, the declared counts, and that skip values are present
+  iff `min_neighbors < max_neighbors`. Tables over one shared local dimension
+  must also have the same neighbor structure (skip values at the same
+  positions). Not on every call: building a table's type is too slow for the
+  call path.
+- The class never holds data; the table crosses process boundaries as it did.
 
 ### The local dimension
 
@@ -362,8 +364,25 @@ tables assign different neighbors to the same origin element. The model:
 - `Local` is **not** passed through the base subscription
   (`NeighborConnectivity[V, "V2E.Local", E]`): mypy accepts that string
   forward reference, pyright reports `Class definition for "V2E" depends on
-  itself`. The metaclass reads `cls.Local` after the class body has run; on
-  Python 3.13 a PEP 696 default type parameter is the typed alternative.
+  itself`. The base declares `Local: ClassVar[type[LocalDimensionIndex]]` as an
+  *annotation only* (a real nested class on the base is an incompatible
+  override for pyright), and `__init_subclass__` reads `cls.Local` after the
+  class body. The annotation gives library code `conn.Local` as a *value* of
+  type `type[LocalDimensionIndex]`; it does not make `conn.Local` usable as an
+  *annotation* for a generic `conn`, which no checker allows — generic code
+  names the local dimension through a `TypeVar` bound to
+  `LocalDimensionIndex`.
+- A declaration can instead **adopt** a module-level local dimension
+  (`Local = V2EDim`); it keeps its own tag. This is also how the migration
+  script rewrites existing `FieldOffset`s without renaming anything.
+- A connectivity can **share** another one's local dimension
+  (`class C2CE(NeighborConnectivity[C, CE]): Local = C2E.Local`). ICON4Py's
+  flattened sparse offsets (`C2CE`, `E2ECV`, `E2EC`, `C2CEC`) need exactly this,
+  because their results must combine with `C2E`-shaped sparse fields. The
+  owner stays `C2E`; the sharer must have the same origin, its counts are the
+  owner's, and reductions over the shared axis take the neighbor structure
+  from any bound table over it (`connectivity_key_over`: the owner's if bound,
+  else the sharer with the smallest tag).
 - `max_neighbors` / `min_neighbors` are class keywords, exactly as #2844 does
   `kind`, and optional (see Binding model). They are *not* type parameters:
   Python has no integer-valued type parameters, and nothing static needs the
@@ -377,68 +396,66 @@ tables assign different neighbors to the same origin element. The model:
   Such axes want the *storage and layout* treatment of a sparse dimension,
   not a connectivity; declaring them non-LOCAL instead would make them domain
   dimensions requiring a range in every program domain and would change
-  ICON4Py's memory layout for those fields. Backends handle the owner-less
-  form exactly as they handle `_CONST_DIM` today, generalized from size 1 to
-  size *n*.
-- `_CONST_DIM` (`iterator/embedded.py:220`) is therefore the owner-less
-  `ConstList(LocalDimensionIndex, size=1)`, replacing a magic name that is
-  special-cased at twelve use sites today (six in `iterator/embedded.py`,
-  six in the DaCe lowering).
+  ICON4Py's memory layout for those fields. (Backend support for sparse fields
+  over an owner-less axis *other than* `ConstList` is not part of the stack:
+  such a field still needs some bound table over its axis.)
+- `_CONST_DIM` is the owner-less `common.ConstList(LocalDimensionIndex, size=1)`,
+  one class used by iterator embedded and the DaCe lowering with identity
+  checks.
 - `neighbor_sum(..., axis=V2E.Local)` — the local axis stays **explicit**.
   `axis=V2E` as sugar is deliberately not offered; it would blur the two
   concepts the design separates.
 
 ### `MultiDimensionIndex`
 
-Included so the final picture is complete, even though it is the last piece
-to implement and nothing else depends on it:
-
-- It is the **index type of a sparse-field position**. `V2E.Local(2)` alone
-  cannot address an element; `(V(3), V2E.Local(2))` can. Today that pair is a
-  dict keyed by dimension-name strings (`iterator/embedded.py:597-616`).
-- It is the **domain index of a `NeighborConnectivity`**, which is what makes
-  `Connectivity[MultiDimensionIndex[Origin, Local], Codomain]` a real
-  index-to-index function type.
-- `*Ls` is unconstrained because `TypeVarTuple` cannot carry a bound; a
-  runtime check in `__init_subclass__` covers what the checker cannot.
+- `MultiDimensionIndex(Vertex(3), V2E.Local(2))` is a position in the product
+  of a primary and local dimensions. It is a `tuple` subclass, so it indexes a
+  field or a table directly (`v2e_table[position]`).
+- `*Ls` is unconstrained because `TypeVarTuple` cannot carry a bound; the
+  constructor checks the shape at runtime.
+- The original note also made it "the domain index of a
+  `NeighborConnectivity`", i.e. `Connectivity[MultiDimensionIndex[Origin,
+  Local], Codomain]`. That was dropped with the decision that a declaration is
+  not a `Connectivity` (see Open question 6).
+- The iterator-level embedded execution keys its positions by dimension
+  classes instead of tag strings and steps along a local dimension with an
+  explicit `SparseAxis(dim)`; `SparseTag` is gone.
 
 ### Effect per layer
 
-| Layer | Today | Under the proposal |
+| Layer | Before | As implemented |
 | --- | --- | --- |
 | Frontend declaration | `Dimension(LOCAL)` + `FieldOffset` + provider key | one class |
-| Frontend types | `ts.OffsetType(source, target)`, tag dropped | `ConnectivityType`, produced by the class (`TODO` at `type_specifications.py:74`) |
-| FOAST → GTIR | shift tag = **Python variable name** (`foast_to_gtir.py:305, 331`) | tag = `cls.tag`; the variable name is irrelevant |
-| ITIR | `OffsetLiteral(str)` + dict lookup | node carries the local dim's tag, resolved by import — the `CartesianOffset` pattern |
+| Frontend types | `ts.OffsetType(source, target)`, tag dropped | `ts.OffsetType` produced by the class (`__gt_type__`), carrying `offset_tag`; `V2E.Local` in DSL code types as the local dimension |
+| FOAST → GTIR | shift tag = **Python variable name** | tag = `offset_tag`; the variable name is irrelevant (fixed first, as PR 1) |
+| ITIR | `OffsetLiteral(str)` + dict lookup; `AxisLiteral(value, kind)` | `OffsetLiteral(offset_tag)`, unchanged node; `AxisLiteral(value)` with `kind` derived |
 | ITIR types | `ListType.offset_type: Dimension` | unchanged (already the local dim) |
-| Embedded field | `get_offset(provider, axis.value)` | `axis.owner`, bound table from context |
-| Embedded iterator | positions keyed by name strings; `SparseTag` | `MultiDimensionIndex` positions (last step) |
-| gtfn | `dim.value` lookups for sparse args; `TagDefinition` per tag and per `neighbor_dim` | `local_dim.owner`; `codegen_name(tag)` |
-| DaCe | ~10 `offset_type.value` lookups; `Dimension(offset, LOCAL)` synthesized at `gtir_to_sdfg_lambda.py:1155` | `local_dim.owner`; no synthesis |
-| roundtrip backend | emits `gtx.Dimension("<name>", kind=...)` / `offset("<tag>")` as *source text* (`runners/roundtrip.py:175-179`) | emits imports of the qualified names, via `codegen_name` for the Python identifier |
-| Provider | `Mapping[str, NeighborTable]` | `Mapping[type[NeighborConnectivity], NeighborTable]`; **no string keys** and no deprecation window (a scripted migration for ICON4Py instead) |
+| Embedded field | `get_offset(provider, axis.value)` | table over the local dimension (`connectivity_key_over`); `V2E.bound_table()` |
+| Embedded iterator | positions keyed by name strings; `SparseTag` | positions keyed by dimension classes; `SparseAxis(dim)` |
+| gtfn | `dim.value` lookups; `TagDefinition` per tag and per `neighbor_dim` | `codegen_name(tag)`; lookups through `connectivity_key_over` |
+| DaCe | ~10 `offset_type.value` lookups; `Dimension(offset, LOCAL)` synthesized | `codegen_name` for array/symbol names; `connectivity_key_over`; no synthesis |
+| roundtrip backend | emits `gtx.Dimension("<name>")` / `offset("<tag>")` as source text | emits `gtx.resolve("<tag>")` bound to mangled identifiers |
+| Provider | `Mapping[str, NeighborTable]` | public: `{V2E: table}`; internal: keyed by `offset_tag`, normalized at the entry points; no deprecation window (a migration script for ICON4Py instead) |
 
 ### What it deletes
 
-`FieldOffset` as the unstructured declaration; `runtime.Offset` as its base
-(the `TODO` at `fbuiltins.py:467-470`); `ts.OffsetType`; the four
-`OffsetProvider*` aliases in their
-string-keyed form; `dimension(tag, kind)`, the interning registry and the
-`copyreg` hook from #2844; the `_Staggered` prefix and its string sniffing;
-`_CONST_DIM` as a magic name; and the convention that
+`FieldOffset` (both forms) and its export; the string-keyed provider *API*
+(bare names are rejected); `dimension(tag, kind)`, the interning registry and
+the `copyreg` hook of #2844 (only a narrow one for `Staggered[D]` remains); the
+`_Staggered` prefix and its string sniffing; `_CONST_DIM` as a magic name;
+the stored `AxisLiteral.kind`; `SparseTag`; `DimensionIndex(kind=LOCAL)` as a
+way to declare a local dimension; and the convention that
 `V2EDim = Dimension("V2E", LOCAL)` must sit next to `V2E = FieldOffset("V2E", ...)`.
 
-**Deleted only together with its replacement:** the single-target
-(Cartesian) `FieldOffset` form. Cartesian *shifts* already use
-`Dimension + int` (GridTools/gt4py#2411), but `as_offset(offset, field)`
-(`ffront/experimental.py:17`) requires a Cartesian `FieldOffset`
-(`type_deduction.py:956-967`, S6 in the appendix), is used in 5 test modules
-plus the `Ioff`/`Koff`/`EdgeOffset` fixtures in `cases_utils.py:163-169`, and
-ICON4Py calls it in diffusion and the dycore (`as_offset(Koff, ...)`, with
-`offset_provider={"Koff": KDim}`). Since there is no deprecation window, a
-dimension-based signature — `as_offset(KDim, field)` is the obvious
-candidate — must land in the **same release** that removes `FieldOffset`,
-and the migration script must rewrite these call sites too.
+**Kept**, contrary to the original note: `ts.OffsetType` (it now types only
+declarations and `as_offset`; renaming it to `ConnectivityType` would be churn
+without a user-visible gain), `iterator.runtime.offset("...")` (the
+iterator-level API names offsets by string, like the IR), and string-keyed
+providers *below* the entry points.
+
+The Cartesian `FieldOffset` went in the same PR as the unstructured one:
+Cartesian shifts were already `Dim + i`, and `as_offset` now takes the
+dimension, `as_offset(KDim, field)`.
 
 ### Relation to `Local[V2E]`
 
@@ -548,88 +565,99 @@ sparse storage treatment, changing ICON4Py's layout for `LsqUnkDim` fields.
   and the multi-table case (halo variants, rewritten `keep_skip_values`
   tables, several meshes in one process) is addressed by neither yet.
 - **ADR 0026 (Staggered dimensions).** The `_Staggered` name prefix cannot
-  survive type identity; `Staggered[D]` is required, not optional.
+  survive type identity; `Staggered[D]` is required, not optional
+  (implemented in PR 2).
 - **ADR 0019 (Connectivities).** The part naming `FieldOffset` as the
-  frontend identifier is superseded; the `Connectivity` / `NeighborTable` /
-  `ConnectivityType` vocabulary is kept and strengthened.
+  frontend identifier is superseded (by ADR 0029); the `Connectivity` /
+  `NeighborTable` / `ConnectivityType` vocabulary is kept.
 - **[[personal/havogt/closure-variable-resolution|Closure variable
   resolution]].** The N2 leak (Python variable name becoming the IR tag) is a
   closure-variable-resolution bug in `foast_to_gtir`; that proposal's
   resolution mechanism should be the vehicle for the fix.
 
-**Open:**
+**Open questions, and how the implementation answered them:**
 
-1. **Naming.** `NeighborConnectivity[Origin, Codomain]` vs the sketch's
-   `StaticMultiConnectivity[F, L, T]` vs the existing
-   `NeighborConnectivityType.source_dim`/`neighbor_dim` (a third vocabulary
-   this note would otherwise add to the two it criticizes); `Local` vs `Dim`;
-   `min_neighbors` vs `has_skip_values`. Converge with
+1. **Naming.** Implemented with `NeighborConnectivity[Origin, Codomain]`,
+   `Local`, `max_neighbors` / `min_neighbors`, and `offset_tag` for the IR
+   name. Convergence with
    [[personal/havogt/dependent-local-dimensions|dependent local dimensions]]
-   before either lands.
-2. **How `Local` reaches the base's parametrization.** Discovered by the
-   metaclass after the class body (works on 3.12, untyped in the base), or a
-   PEP 696 default type parameter (3.13, typed)? AGENTS.md invites 3.13
-   features where they improve a design; this is a candidate.
-3. **`__main__` in spawn workers.** Document, or detect and fall back to
-   in-process compilation with a warning?
-4. **ICON4Py migration.** `gtx.FieldOffset`, `Dimension(..., LOCAL)`,
-   `as_offset(Koff, ...)` and string-keyed providers (`{"V2E": ..., "Koff": KDim}`)
-   are all public and all change in **one release, with no deprecation
-   window**. ICON4Py's keys are bare names, so no import-based shim could
-   have resolved them anyway; the migration is a script over
-   `dimension.py` (16 offsets, 15 local dims), the `offset_provider`
-   construction in `grid/base.py`, and the `as_offset` call sites. `LsqUnkDim`
-   becomes an owner-less `LocalDimensionIndex` with `size=`. What the script
-   cannot decide is whether each connectivity declares its counts or leaves
-   them to bind time; the ICON skip-value rules (`icon.py:130`) suggest
-   leaving `min_neighbors` open for the boundary offsets.
-5. **Duplicate declarations.** With type identity, two modules declaring
-   `class V2E(...)` are two connectivities. Is a warning on same-`__name__`
-   collisions in one program useful, or noise?
-6. **What is an instance of `V2E`?** Today `Connectivity` is
-   `Field[DimsT, IntegralScalar]` parametrized by `Dims` plus a codomain
-   (`common.py:990`), and `CartesianConnectivity` is a dataclass with
-   instances. The sketch's `Connectivity[Src, Dst]` is a different
-   parametrization, and `V2E` is a data-less type constructor subclassing a
-   runtime protocol. Either instances of `V2E` are the bound tables (so
-   `{V2E: table}` becomes `V2E(table)`), or `NeighborConnectivity` is not a
-   `Connectivity` subclass at all and only *produces* one at bind time. The
-   sketch leaves this open and should not.
+   (`Dim`, `has_skip_values`, `source_dim`/`neighbor_dim`) is still to be
+   discussed on the PRs; the names are public from PR 3 on.
+2. **How `Local` reaches the base.** Metaclass discovery after the class body,
+   with a `ClassVar` annotation on the base (3.12-compatible). A PEP 696
+   default type parameter was not needed.
+3. **`__main__` in spawn workers.** Detected: jobs referencing a class of an
+   interactive `__main__` are compiled in the calling process.
+4. **ICON4Py migration.** `scripts/python/migrate_connectivities.py` rewrites
+   `Dimension(...)` and `FieldOffset(...)` declarations (connectivities adopt
+   their existing local dimensions, so `C2EDim` etc. keep working and `C2CE`
+   becomes a sharer), removes Cartesian offsets and rewrites their uses
+   (`Koff[1]` → `KDim + 1`, `as_offset(KDim, ...)`, imports), and reports
+   what it cannot decide from the source. A dry run over ICON4Py `main`
+   rewrites `dimension.py` and ~50 stencil modules and leaves 79 string
+   provider keys, 30 removable Cartesian provider entries and 14
+   `isinstance(..., Dimension)` checks to do by hand. Declaring counts is left
+   to ICON4Py.
+5. **Duplicate declarations.** No warning was added.
+6. **What is an instance of `V2E`?** Nothing: `NeighborConnectivity` is **not**
+   a `Connectivity`, and instantiating a declaration raises. The table stays a
+   `Connectivity` implementation and is *checked against* the declaration.
+   `Field.premap`/`__call__` accept either a table or a declaration, as they
+   accepted a `FieldOffset` (which was not a `Connectivity` either).
+7. **New: connectivities sharing a local dimension** (raised by the review of
+   the test-tree migration): needed for ICON4Py's flattened sparse offsets;
+   answered by adopting an owned `Local` and naming the sharer by its own tag.
 
-## Staging
+## Implementation
 
-Each step is landable separately and leaves the tree green.
+A stack of GridTools/gt4py PRs, each green on its own. It is an alternative to
+#2844 (which implemented `(name, kind)` value identity) that takes over the
+parts of #2844 compatible with type identity.
 
-0. **Fix the N2 leak now, independently.** `foast_to_gtir.py:305, 331` emit
-   the offset's own tag; extend `test_offset_dimensions_names.py` to
-   `neighbor_sum`, embedded and DaCe so A3 is *visible*. This is a bug today.
-1. **#2844 lands**, then the `DimensionBaseIndex` root and type identity
-   (registry and `copyreg` removed, importability rule added,
-   `resolve(tag)` by import). Revision of `shared/dimensions-as-types.md`.
-2. **`NeighborConnectivity` + `LocalDimensionIndex`** (owned and owner-less)
-   in `common`; object-keyed provider; `FieldOffset` and string keys removed
-   outright; bind-time completion and validation of the counts.
-3. **`ts.OffsetType` → `ConnectivityType`**; `as_offset` gets its
-   dimension-based signature in the same step, so the Cartesian `FieldOffset`
-   form can go with the rest.
-4. **Backends** switch from `local_dim.value` lookups to `local_dim.owner`,
-   one file at a time (`gtfn_module.py`, `unroll_reduce.py`, `gtir_to_sdfg*.py`,
-   `nd_array_field.py`, `iterator/embedded.py`, and the source-emitting
-   `runners/roundtrip.py`). `codegen_name` introduced.
-5. **`Staggered[D]`**, superseding ADR 0026; `_CONST_DIM` becomes the
-   owner-less `ConstList` local dimension.
-6. **`MultiDimensionIndex`** and typed embedded positions.
-7. **Typing tests** (`typing_tests/test_next.yaml`, pyright): `Field[Dims[V, V2E.Local], float]`,
-   a `TypeVar` bound to `LocalDimensionIndex`, a negative case mixing two
-   connectivities' locals — the probes in
-   [`typing_probe.py`](connectivities-as-types/typing_probe.py) are the
-   starting set.
-8. **Test-tree migration** as its own PR (`toy_connectivity.py`,
-   `cases_utils.py`, `fvm_nabla_setup.py` are the fixture modules everything
-   imports).
+| # | PR | What |
+| --- | --- | --- |
+| 1 | GridTools/gt4py#2898 | `fix[next]`: lower unstructured shifts with the offset's own tag (the N2 leak), regression matrix for the four names |
+| 2 | GridTools/gt4py#2899 | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0028); `codegen_name`; `Staggered[D]`; interactive-`__main__` fallback; the one-string invariant pulled forward (`FieldOffset(V2EDim.tag, ...)`, `{V2EDim.tag: table}`) |
+| 3 | GridTools/gt4py#2907 | `feat[next]`: `NeighborConnectivity`, `LocalDimensionIndex`, `check_neighbor_table`; usable in the DSL; shared local dimensions; ADR 0029 |
+| 4 | GridTools/gt4py#2908 | `feat[next]`: the test tree and docs declare connectivities as classes; `DimensionIndex(kind=LOCAL)` rejected; two-target `FieldOffset` deprecated |
+| 5 | GridTools/gt4py#2909 | `feat[next]`: backends support connectivities sharing a local dimension (`connectivity_key_over`) |
+| 6 | GridTools/gt4py#2910 | `feat[next]!`: class-keyed offset providers; `FieldOffset` removed; `as_offset(dim, field)`; migration script |
+| 7 | GridTools/gt4py#2911 | `refactor[next]`: `ConstList` replaces `_CONST_DIM`; `AxisLiteral` drops `kind` |
+| 8 | GridTools/gt4py#2912 | `refactor[next]`: `MultiDimensionIndex` and typed embedded positions |
 
-An ADR in gt4py (next in sequence after 0028) should record steps 1–2, since
-they reverse two recorded decisions and change a public-API shape.
+### Where the implementation departs from the original proposal
+
+- **No `DimensionBaseIndex`**; `LocalDimensionIndex` subclasses
+  `DimensionIndex`. Generic constructors whose parameter must be a primary
+  dimension (`NeighborConnectivity[Origin, Codomain]`, `Staggered[D]`,
+  `MultiDimensionIndex`) check it at runtime.
+- **`NeighborConnectivity` is not a `Connectivity`** (Open question 6), so
+  `MultiDimensionIndex` is not the domain index of a declaration.
+- **The IR names a connectivity by its local dimension's tag** (its
+  `offset_tag`), not by the connectivity's own tag, and **internal providers
+  stay keyed by that string**; only the public API takes classes. This made
+  the originally planned "backends resolve through `Local.owner`" step
+  unnecessary — with one string per connectivity, going through `owner`
+  changes nothing.
+- **Shared local dimensions** were not in the proposal and turned out to be
+  needed (ICON4Py's flattened offsets). They reintroduce an offset tag that
+  differs from its local dimension's tag, for which the backends got
+  `connectivity_key_over`.
+- **`Staggered[D]` had to land with the dimension change**, not later, and it
+  is an interning metaclass subscription, not a PEP 695 generic; a narrow
+  `copyreg` hook remains for it.
+- **Codegen mangling** is a prefix escape (`_u`, `_d`, `_l`, `_r`); the
+  proposed "escape `__` then replace `.`" is not injective.
+- **Interactive `__main__`** is handled (in-process compilation), not merely
+  documented.
+- **`ts.OffsetType` and `iterator.runtime.offset` are kept**; providers stay
+  string-keyed below the entry points.
+- **The one-string invariant** (offset tag = local dimension tag = provider
+  key) was pulled forward into the dimension PR: once tags became qualified
+  names, most test-tree local dimensions stopped matching their offsets' tags.
+- **Staging**: the proposal's step 2 bundled the declaration migration, the
+  provider key change and the removals; they had to be separate to stay green
+  (declarations first, class keys last).
 
 ## Appendices
 
