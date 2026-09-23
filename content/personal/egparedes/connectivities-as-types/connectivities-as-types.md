@@ -247,7 +247,7 @@ class C2E(NeighborConnectivity[C, E]):
 
 
 class C2CE(NeighborConnectivity[C, CE]):       # a flattened sparse pattern:
-    Local = C2E.Local                          # shares C2E's neighbor axis
+    Local: typing.TypeAlias = C2E.Local        # shares C2E's neighbor axis
 
 
 class LsqUnk(LocalDimensionIndex, size=3): ...                       # owner-less local axis
@@ -355,9 +355,10 @@ tables assign different neighbors to the same origin element. The model:
 - **Normalized at the entry points.** `as_tag_keyed_offset_provider`
   rewrites the provider to the form the IR uses, keyed by `offset_tag`. It is
   called *strictly* by `Program.__call__`, `FieldOperator.__call__`,
-  `FieldOperatorFromFoast.__call__`, `compile`,
-  `CompilationOptions.connectivities` and DaCe `get_sdfg_conn_args`, and
-  *non-strictly* by `embedded.context.update` and the iterator `fendef`.
+  `FieldOperatorFromFoast.__call__`, `compile` and
+  `CompilationOptions.connectivities`, and *non-strictly* by
+  `embedded.context.update`, the iterator `fendef` and DaCe
+  `get_sdfg_conn_args`.
   Strict means that a key which is neither a declaration nor a dotted tag
   string — e.g. `"V2E"`, the removed `FieldOffset` spelling — raises
   `TypeError`; the iterator-level hooks accept any string, since hand-written
@@ -368,12 +369,15 @@ tables assign different neighbors to the same origin element. The model:
   IR — so the backends' accesses *by connectivity tag* did not change; those
   keyed by a *local dimension* (reductions, sparse and list arguments) now
   find the table through `connectivity_key_over`.
-- **Validated at the boundary.** `check_offset_provider` runs when a compiled
-  variant is created (variants are keyed by the *identity* of the bound
-  tables, so a new table object means a new variant and a new check) and on
-  every embedded `Program` / `FieldOperator` call; not on compiled calls,
-  because building a table's type is too slow for that path. It calls
-  `check_neighbor_table` per declaration, which checks the domain
+- **Validated at the boundary.** `check_offset_provider` runs at *every* entry
+  point, including the iterator `fendef`, `FieldOperatorFromFoast` and the DaCe
+  orchestration's `CompilationOptions.connectivities`. Its result is remembered
+  per set of bound tables (hashed by their `id`, as the compiled-program cache
+  keys its variants), so a repeated call with the same tables costs one hash;
+  like that cache, the memo can in principle skip a check when a freed table is
+  replaced at the same address. Reading the tables — comparing skip positions,
+  below — happens only where a program is compiled, not on the call path. It
+  calls `check_neighbor_table` per declaration, which checks the domain
   `(Origin, Local)` and the codomain by class identity (with a hint when a
   declaration looks redefined), an integral dtype, `max_neighbors` equal to
   the table's width and `min_neighbors` not above it if declared, and — only
@@ -381,9 +385,13 @@ tables assign different neighbors to the same origin element. The model:
   `min_neighbors <` its width. Skip values are judged on the table's *type*:
   the number of valid neighbors per row is never counted. `check_offset_provider`
   additionally requires all tables over one local dimension to agree on width
-  and skip-value presence and, for concrete tables, on the skip positions.
-  The iterator `fendef`, `FieldOperatorFromFoast` and DaCe orchestration via
-  `CompilationOptions.connectivities` are not validated.
+  and skip-value presence and — where a program is compiled — on the skip
+  positions of the concrete tables, compared on the device the tables live on.
+  A key that names the *connectivity* instead of the declaration (`{V2E.tag:
+  table}`, which is the IR name only of a connectivity that shares a local
+  dimension) is rejected with a pointer to `{V2E: table}`. A string key that is
+  not a qualified name at all is remembered as such, so it costs one import
+  attempt in total rather than one per call.
 - The class never holds data; the table crosses process boundaries as it did.
 
 In dependent-typing terms, the "true" type of a local index is
@@ -416,35 +424,52 @@ up.
 - `Local` is **not** passed through the base subscription
   (`NeighborConnectivity[V, "V2E.Local", E]`): mypy accepts that string
   forward reference, pyright reports `Class definition for "V2E" depends on
-  itself`. The base declares `Local: ClassVar[type[LocalDimensionIndex]]` as an
-  *annotation only* (a real nested class on the base is an incompatible
-  override for pyright), and `__init_subclass__` reads `cls.Local` after the
-  class body. The annotation gives library code `conn.Local` as a *value* of
-  type `type[LocalDimensionIndex]`; it does not make `conn.Local` usable as an
-  *annotation* for a generic `conn`, which no checker allows — generic code
-  names the local dimension through a `TypeVar` bound to
-  `LocalDimensionIndex`.
-- A declaration can instead **adopt** a module-level local dimension
-  (`Local = V2EDim`); the local keeps its own tag, which is then the
-  connectivity's `offset_tag`. This is also how the migration script rewrites
-  existing `FieldOffset`s without renaming anything. Adopting is *not*
+  itself`. `__init_subclass__` reads it from the class body instead.
+- **`Local` is annotated nowhere**, and that is load-bearing. An annotation on
+  the base (`Local: ClassVar[type[LocalDimensionIndex]]`) or on the metaclass
+  makes a declaration's `Local` a *variable* for the checkers, so
+  `Field[Dims[V, V2E.Local], float]` is rejected — by pyright for a nested
+  `Local` ("Variable not allowed in type expression"), by mypy for an adopted
+  or shared one ("not valid as a type"). A real nested `Local` on the base is
+  not an option either: pyright reports an incompatible override in every
+  declaration. With no annotation anywhere, all three spellings are types for
+  both checkers.
+  The cost is that `conn.Local` is not an attribute the checkers know for a
+  *generic* `conn`: library code reads it through
+  `common.local_dimension_of(conn)`, and code that must name a local dimension
+  generically uses a `TypeVar` bound to `LocalDimensionIndex`. This is checked
+  for both checkers in CI: the mypy cases in `typing_tests/test_next.yaml`, and
+  a pyright run over `typing_tests/pyright_probes.py` in the same nox session
+  (pyright is what catches the annotation regression; mypy accepts it).
+- A declaration can instead **adopt** a module-level local dimension, written
+  `Local: typing.TypeAlias = V2EDim`; the local keeps its own tag, which is then
+  the connectivity's `offset_tag`. This is also how the migration script
+  rewrites existing `FieldOffset`s without renaming anything. Adopting is *not*
   side-effect free: the adopter becomes the local's `owner` and writes its
   counts onto the module-level class, and ownership is first-come — the first
-  connectivity declared over a local dimension owns it, later ones share it.
+  connectivity declared over a local dimension owns it, later ones share it. A
+  declaration *redefined* under the same tag (a re-run notebook cell) takes
+  ownership over again rather than becoming a sharer, and the counts it repeats
+  are then checked against the local dimension's own `size=`, not against what
+  the stale owner wrote. `ConstList` cannot be adopted: it belongs to no
+  connectivity.
 - A connectivity can **share** another one's local dimension
-  (`class C2CE(NeighborConnectivity[C, CE]): Local = C2E.Local`). ICON4Py's
-  flattened sparse offsets (`C2CE`, `E2ECV`, `E2EC`, `C2CEC`) need exactly this,
-  because their results must combine with `C2E`-shaped sparse fields. The
+  (`class C2CE(NeighborConnectivity[C, CE]): Local: typing.TypeAlias =
+  C2E.Local`). ICON4Py's flattened sparse offsets (`C2CE`, `E2ECV`, `E2EC`,
+  `C2CEC`) need exactly this, because their results must combine with
+  `C2E`-shaped sparse fields. The
   owner stays the first declaration over the local (here `C2E`); the sharer
   must have the same origin (its codomain is free), any counts it repeats must
   equal the owner's, and reductions over the shared axis take the neighbor
   structure from any bound table over it (`connectivity_key_over`: the owner's
   key if bound, else the smallest bound key over that local, which raises
   `KeyError` if there is none).
-- **In annotations, name the local dimension by its declaring class.** An
-  adopted or shared `Local` is a plain class attribute assignment:
-  `C2CE.Local` works as a *value* (`axis=C2CE.Local`), but annotations should
-  write `Field[Dims[C, C2E.Local], ...]` or `Field[Dims[V, V2EDim], ...]`.
+- **Write an adopted or shared `Local` as a `TypeAlias`.** `Local: TypeAlias =
+  C2E.Local` is what keeps mypy treating `C2CE.Local` as a type; with a plain
+  assignment it is "not valid as a type" there (pyright accepts either, but
+  widens the plain form to `LocalDimensionIndex`). With the alias, annotations
+  may name the local dimension through any of its spellings — `C2CE.Local`,
+  `C2E.Local`, `V2EDim` — and they are one type.
 - `max_neighbors` / `min_neighbors` are class keywords, exactly as #2844 does
   `kind`, and optional (see Binding model). They are *not* type parameters:
   Python has no integer-valued type parameters, and nothing static needs the
@@ -464,7 +489,8 @@ up.
   such a field still needs some bound table over its axis.)
 - `_CONST_DIM` is replaced by the owner-less
   `common.ConstList(LocalDimensionIndex, size=1)`, one class used by iterator
-  embedded and the DaCe lowering with identity checks. (Type inference still
+  embedded and the DaCe lowering with identity checks, and refused as an
+  adopted `Local`. (Type inference still
   represents a constant list as `ListType(offset_type=None)`.)
 - `neighbor_sum(..., axis=V2E.Local)` — the local axis stays **explicit**.
   `axis=V2E` as sugar is deliberately not offered; it would blur the two
@@ -474,13 +500,16 @@ up.
 
 - `MultiDimensionIndex(Vertex(3), V2E.Local(2))` is a position in the product
   of a primary and local dimensions. It is a `tuple` subclass, so it indexes a
-  field or a table directly (`v2e_table[position]`, a 0-d field), and compares,
-  hashes and pickles like the plain tuple. It is a user-facing typed index;
-  nothing in the toolchain requires it.
-- `*Ls` is unconstrained because `TypeVarTuple` cannot carry a bound; the
-  constructor checks the *kinds* of the components at runtime (one non-local
-  index, then local indices), not that the local dimensions belong to the
-  primary one: `MultiDimensionIndex(Edge(1), V2E.Local(1))` is accepted.
+  field or a table directly (`v2e_table[position]`, a 0-d field), and compares
+  and hashes like the plain tuple; `pickle` and `copy` keep it a
+  `MultiDimensionIndex`, tuple operations such as slicing do not. It is a
+  user-facing typed index; nothing in the toolchain requires it.
+- `*Ls` is unconstrained because `TypeVarTuple` cannot carry a bound, so the
+  constructor checks the shape at runtime: one non-local index, then *at least
+  one* local index, and an owned local dimension must index the neighbors of the
+  primary index's dimension — `MultiDimensionIndex(Edge(1), V2E.Local(1))` is a
+  `TypeError`, since `V2E` indexes the neighbors of a vertex. An owner-less
+  local axis (`LsqCoeff`) is accepted next to any primary dimension.
 - The original note also made it "the domain index of a
   `NeighborConnectivity`", i.e. `Connectivity[MultiDimensionIndex[Origin,
   Local], Codomain]`. That was dropped with the decision that a declaration is
@@ -666,15 +695,13 @@ sparse storage treatment, changing ICON4Py's layout for `LsqUnkDim` fields.
    their existing local dimensions, so `C2EDim` etc. keep working and `C2CE`
    becomes a sharer), removes Cartesian offsets and rewrites their uses
    (`Koff[1]` → `KDim + 1`, `as_offset(KDim, ...)`, imports), and reports
-   what it cannot decide from the source. The GridTools/gt4py#2910
-   description reports a dry run that rewrites `dimension.py` and 52 stencil
-   modules and leaves 79 provider-key sites and 14
-   `isinstance(..., Dimension)` checks to do by hand. These counts depend on
-   the ICON4Py revision and do not reproduce on current `main`: a re-run on
-   ICON4Py `89b4967` (2026-09-21), after ICON4Py had already dropped
-   `Koff[1]`, rewrites 5 files and reports 46 connectivity provider keys, 2
-   Cartesian provider entries and 5 `isinstance` checks. Declaring counts is
-   left to ICON4Py.
+   what it cannot decide from the source. The counts depend on the ICON4Py
+   revision, so GridTools/gt4py#2910 quotes a pinned one: at ICON4Py
+   `89b4967` (2026-09-21), after ICON4Py had already dropped `Koff[1]`, the
+   script rewrites 4 files (`dimension.py` and 3 stencil modules) and reports
+   46 connectivity provider keys, 2 removable Cartesian provider entries and 10
+   `isinstance(..., Dimension)` sites in 5 modules. Declaring counts is left to
+   ICON4Py.
 5. **Duplicate declarations** (two same-named declarations from different
    modules, or a redefinition). No warning was added; being different
    classes, they are simply different connectivities, and
@@ -707,6 +734,21 @@ raises the churn and the long qualified names.
 | 6 | GridTools/gt4py#2910 | `feat[next]!`: class-keyed offset providers; `FieldOffset` removed; `as_offset(dim, field)`; migration script |
 | 7 | GridTools/gt4py#2911 | `refactor[next]`: the `ConstListDim` class (from PR 2) becomes `ConstList` with `size=1`, replacing the `_CONST_DIM` aliases by identity checks; `AxisLiteral` drops `kind`; printing IR never imports (`resolve_loaded`) |
 | 8 | GridTools/gt4py#2912 | `refactor[next]`: `MultiDimensionIndex` and typed embedded positions |
+
+Each of PRs 2–8 carries a follow-up commit applying an independent review of
+this note against the code (the "review fixes" commits). The behaviour they
+changed is described above; in outline: `Local` is annotated nowhere, so it
+stays a type for pyright as well as mypy, and `common.local_dimension_of` is
+the accessor for library code (PR 3); adoption and sharing are written
+`Local: TypeAlias = ...`, and the `make_const_list` dimension cannot be adopted
+(PRs 3, 4, 6); a redefined declaration re-owns an adopted local dimension
+(PR 3); `check_offset_provider` runs at every entry point, is memoized per set
+of bound tables and reads the tables only where a program is compiled, and a
+key naming the connectivity rather than the declaration is rejected (PR 6);
+`MultiDimensionIndex` requires a local index and checks it against the primary
+dimension (PR 8); a dimension cannot be staggered twice and staggered classes
+are interned thread-safely (PR 2); pyright runs in the typing nox session
+(PR 3).
 
 ### Where the implementation departs from the original proposal
 
