@@ -208,10 +208,10 @@ wrappers offer part of this discipline in ordinary languages.
 | `Option`-valued slots of a padded ragged row | `skip_value` (−1) in the table | same; if `min_neighbors` is declared, skip values must be present iff `min_neighbors < max_neighbors` |
 | `NeighborOrder<g>` — the enumeration | a `NeighborTable` / `NdArrayConnectivityField` | unchanged: the table *is* the enumeration |
 | `(v : Vert<g>) -> Fin<degree(g, v)> -> double` — slot-addressed field | `Field[Dims[V, V2EDim], float]` | `Field[Dims[V, V2E.Local], float]` |
-| `Incidence<g>` — a Σ-typed position | an untyped `{"Vertex": 3, "V2E": 2}` dict | `MultiDimensionIndex(V(3), V2E.Local(2))`; component kinds checked at run time, not that `V2E.Local` belongs to `V` |
+| `Incidence<g>` — a Σ-typed position | an untyped `{"Vertex": 3, "V2E": 2}` dict | `MultiDimensionIndex(V(3), V2E.Local(2))`; checked at run time that `V2E.Local` indexes the neighbors of a `V` (the dependency of the second component on the first, but not on the value `3`) |
 | the graph value `g` in the signature | a string-keyed `offset_provider` | a bound connectivity: `{V2E: table}` binds the class to one table per call |
 | `GraphPackage` — graph plus checked operations | — | the provider after `check_offset_provider` (and, in [[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos\|the mesh proposal]], a Mesh object) |
-| validate at the boundary, reuse evidence | no check; errors surface as `KeyError` or wrong results | `check_offset_provider` when a compiled variant is created and on embedded calls, then trusted by lowering and backends |
+| validate at the boundary, reuse evidence | no check; errors surface as `KeyError` or wrong results | `check_offset_provider` at every entry point, remembered per set of bound tables, then trusted by lowering and backends |
 
 ### What is kept statically
 
@@ -224,8 +224,9 @@ wrappers offer part of this discipline in ordinary languages.
   declared* `Local` — it is the only spelling that is a real, distinct type for
   both checkers (probes P1b and P2 in
   [`typing_probe.py`](typing_probe.py)). A connectivity that *shares* or
-  *adopts* a local dimension exposes it as a plain attribute, so annotations
-  name the declaring class (`C2E.Local`, not `C2CE.Local`).
+  *adopts* a local dimension spells it `Local: TypeAlias = C2E.Local`, so
+  `C2CE.Local` and `C2E.Local` are the same type — one slot type, two
+  relations enumerating it.
 - **A brand per mesh entity (§7).** Nominal identity makes two independently
   declared `Vertex` classes distinct types, statically and at run time. The
   `(name, kind)` equality of [[shared/dimensions-as-types|dimensions as types]]
@@ -284,8 +285,8 @@ Sharing a slot type across two connectivities is only sound if both tables
 enumerate each cell's fiber in the same order and pad it in the same places.
 The type checker cannot see this; the bind-time check (`check_offset_provider`)
 requires tables over one shared local dimension to have the same width and
-skip-value presence and, for concrete tables, skip values at the same
-positions, and reductions over the shared axis take that structure from any
+skip-value presence and — where a program is compiled — skip values at the
+same positions, and reductions over the shared axis take that structure from any
 bound table over it. Note what this does *not* check: that the two tables list
 each cell's neighbors in the same *order* — §6's bijection — which is again a
 property of the mesh generator.
@@ -293,15 +294,16 @@ property of the mesh generator.
 ### Evidence lifetime
 
 §8's caveat — evidence is valid only for the graph it describes — applies to
-the check's placement. For compiled backends, `check_offset_provider` runs when
-a compiled variant is created, not on every call, because building a table's
-type is too slow for the call path; variants are keyed by the *identity* of
-the bound table objects, so binding a different table creates a new variant
-and re-runs the check, while re-binding the same object reuses the evidence.
-The remaining gap is the one §8 names for mutable data: a table modified in
-place after the check keeps its old evidence. Embedded calls re-check every
-time. Some entry points (the iterator-level `fendef`, DaCe orchestration) do
-not run the check at all — evidence that is never established.
+the check's placement. `check_offset_provider` runs at every entry point, and
+its result is remembered per set of bound tables, keyed by their *identity*:
+binding a different table re-runs the check, re-binding the same object reuses
+the evidence for the cost of one hash. The data-dependent part (comparing skip
+positions of tables over a shared local dimension) runs only where a program
+is compiled, not on the call path. Two gaps remain, both the kind §8 names for
+mutable data: a table modified in place after the check keeps its old
+evidence, and — as with the compiled-program cache, which is keyed the same
+way — a freed table replaced by a new one at the same address could in
+principle reuse the old evidence.
 
 ## Further reading
 

@@ -35,9 +35,10 @@ status: draft
 > ADR 0028 (dimensions as nominal types) and ADR 0029 (connectivities as
 > types). PR 1 is ready for review; PRs 2–8 are drafts. The sections below
 > describe the design **as implemented** on the top branch
-> (`connectivities-as-types-8-typed-positions` at `65fa529b6`, 2026-09-22);
-> where the implementation had to depart from the original proposal, the text
-> was corrected and the departure is listed in
+> (`connectivities-as-types-8-typed-positions`), including the review-fix
+> commits on PRs 2–8 that followed a check of this note against the code at
+> `65fa529b6` (2026-09-23); where the implementation had to depart from the
+> original proposal, the text was corrected and the departure is listed in
 > [Where the implementation departs](#where-the-implementation-departs-from-the-original-proposal).
 
 > **Status**: draft, AI-assisted. The *Problem* section and the appendix are
