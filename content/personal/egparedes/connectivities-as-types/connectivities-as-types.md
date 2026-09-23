@@ -33,11 +33,11 @@ status: draft
 > **Implementation status (2026-09-23).** Implemented as the stacked
 > GridTools/gt4py PRs listed in [Implementation](#implementation), with
 > ADR 0028 (dimensions as nominal types) and ADR 0029 (connectivities as
-> types). PR 1 is ready for review; PRs 2–8 are drafts. The sections below
-> describe the design **as implemented** on the top branch
+> types). PR 1 is merged; PRs 2–8 are drafts rebased onto `main`. The
+> sections below describe the design **as implemented** on the top branch
 > (`connectivities-as-types-8-typed-positions`), including the review-fix
-> commits on PRs 2–8 that followed a check of this note against the code at
-> `65fa529b6` (2026-09-23); where the implementation had to depart from the
+> commits on PRs 2–8 that followed a check of this note against the code
+> (2026-09-23); where the implementation had to depart from the
 > original proposal, the text was corrected and the departure is listed in
 > [Where the implementation departs](#where-the-implementation-departs-from-the-original-proposal).
 
@@ -727,7 +727,7 @@ raises the churn and the long qualified names.
 
 | # | PR | What |
 | --- | --- | --- |
-| 1 | GridTools/gt4py#2898 | `fix[next]`: lower unstructured shifts with the offset's own tag (the N2 leak); adds `ts.OffsetType.tag` and makes shift lowering type-driven, so module-qualified offsets (`a(mod.V2E)`) work (supersedes #2730); regression matrix {shift, `neighbor_sum`} × {tag ≠ variable name, tag ≠ local-dimension name}. A later review commit (`25f7a32c4`, 2026-09-23) reports invalid shift arguments as located `DSLError`s; it is not yet in PRs 2–8, and #2899 currently conflicts |
+| 1 | GridTools/gt4py#2898 | `fix[next]`: lower unstructured shifts with the offset's own tag (the N2 leak); adds `ts.OffsetType.tag` and makes shift lowering type-driven, so module-qualified offsets (`a(mod.V2E)`) work (supersedes #2730); regression matrix {shift, `neighbor_sum`} × {tag ≠ variable name, tag ≠ local-dimension name}. A later review commit reports invalid shift arguments as located `DSLError`s. Merged 2026-09-23 as `7f54f2179`, after which PRs 2–8 were rebased onto `main` and PR 1's four commits dropped |
 | 2 | GridTools/gt4py#2899 | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0028); `codegen_name`; `Staggered[D]`; interactive-`__main__` fallback; `NamedIndex` and the dimension half of the mypy plugin removed; the one-string invariant pulled forward (`FieldOffset(V2EDim.tag, ...)`, `{V2EDim.tag: table}`) |
 | 3 | GridTools/gt4py#2907 | `feat[next]`: `NeighborConnectivity`, `LocalDimensionIndex`, `check_neighbor_table`, declaration fingerprinting; usable in the DSL; shared local dimensions; ADR 0029 |
 | 4 | GridTools/gt4py#2908 | `feat[next]`: the test tree and docs declare connectivities as classes; iterator-embedded `shift`/`neighbors` accept them; `DimensionIndex(kind=LOCAL)` rejected; two-target `FieldOffset` deprecated |
