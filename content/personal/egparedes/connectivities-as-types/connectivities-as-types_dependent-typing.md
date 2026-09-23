@@ -209,7 +209,7 @@ wrappers offer part of this discipline in ordinary languages.
 | `NeighborOrder<g>` — the enumeration | a `NeighborTable` / `NdArrayConnectivityField` | unchanged: the table *is* the enumeration |
 | `(v : Vert<g>) -> Fin<degree(g, v)> -> double` — slot-addressed field | `Field[Dims[V, V2EDim], float]` | `Field[Dims[V, V2E.Local], float]` |
 | `Incidence<g>` — a Σ-typed position | an untyped `{"Vertex": 3, "V2E": 2}` dict | `MultiDimensionIndex(V(3), V2E.Local(2))`; checked at run time that `V2E.Local` indexes the neighbors of a `V` (the dependency of the second component on the first, but not on the value `3`) |
-| the graph value `g` in the signature | a string-keyed `offset_provider` | a bound connectivity: `{V2E: table}` binds the class to one table per call |
+| the graph value `g` in the signature | a string-keyed `offset_provider` | a bound connectivity: `{V2E: table}` binds the class to one table per binding context |
 | `GraphPackage` — graph plus checked operations | — | the provider after `check_offset_provider` (and, in [[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos\|the mesh proposal]], a Mesh object) |
 | validate at the boundary, reuse evidence | no check; errors surface as `KeyError` or wrong results | `check_offset_provider` at every entry point, remembered per set of bound tables, then trusted by lowering and backends |
 
@@ -229,7 +229,7 @@ wrappers offer part of this discipline in ordinary languages.
   relations enumerating it.
 - **A brand per mesh entity (§7).** Nominal identity makes two independently
   declared `Vertex` classes distinct types, statically and at run time. The
-  `(name, kind)` equality of [[shared/dimensions-as-types|dimensions as types]]
+  `(name, kind)` equality of the superseded [[shared/dimensions-as-types|dimensions as types]]
   is the unbranded `Fin<g.nV>` of §7: equal names, interchangeable indices.
   Nominal identity is not sufficient to separate two *meshes* that share the
   same declarations, though — see below.
@@ -240,12 +240,12 @@ Python has no value-indexed types, so the dependency on the table value `g`
 cannot be expressed. The design splits the connectivity type the way §4
 splits data from evidence:
 
-- The **class** `V2E` is the static, erasable part: `Origin`, `Codomain`,
+- The **class** `V2E` is the static, erasable part: `Domain`, `Codomain`,
   `Local` and, optionally, the declared counts. It is what the frontend and the
   type checker see.
-- The **table** is the value `g`. Binding happens per call through the
+- The **table** is the value `g`. Binding happens per binding context through the
   provider (`{V2E: table}`), and `check_neighbor_table` is the "checked
-  decision" of §8: it establishes that the table's domain is `(Origin, Local)`,
+  decision" of §8: it establishes that the table's domain is `(Domain, Local)`,
   its codomain `Codomain`, its dtype integral, its width equal to a declared
   `max_neighbors` and not below a declared `min_neighbors`, and — if
   `min_neighbors` is declared — its skip values consistent with it.
@@ -266,10 +266,10 @@ splits data from evidence:
   representation of §6. `min_neighbors == max_neighbors` is exactly the
   uniform-degree case, which is why it is equivalent to "no skip values".
 - **Same type ⇒ same table (§7).** `V2E` does not identify a mesh. Two
-  different tables bound to `V2E` in two calls give two different, both
-  well-typed, programs. This is deliberate — it is what lets one DSL source run
-  on several meshes — and the one-table-per-class-per-call dict keeps it from
-  becoming ambiguous *within* a call. Guarding against mixing meshes across
+  different tables bound to `V2E` in two binding contexts give two different,
+  both well-typed, programs. This is deliberate — it is what lets one DSL
+  source run on several meshes — and the one-table-per-declaration dict keeps
+  it from becoming ambiguous *within* a context. Guarding against mixing meshes across
   calls (e.g. a field computed on mesh A consumed on mesh B) is out of scope;
   it would need a mesh-level brand, which is where
   [[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos|a mesh concept]]
@@ -278,8 +278,8 @@ splits data from evidence:
 ### The enumeration consequence: shared local dimensions
 
 §6's warning — slot-addressed values are only meaningful relative to one
-enumeration — is the reason for the one genuinely new rule the implementation
-added. `C2CE` (cell → flattened (cell, edge-of-cell) pairs) *shares*
+enumeration — is the reason for the shared-local-dimension rule, the one
+relaxation of "one table per declaration per binding context". `C2CE` (cell → flattened (cell, edge-of-cell) pairs) *shares*
 `C2E.Local` so that its results combine with `C2E`-shaped sparse fields.
 Sharing a slot type across two connectivities is only sound if both tables
 enumerate each cell's fiber in the same order and pad it in the same places.

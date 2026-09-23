@@ -4,8 +4,15 @@ description: "Make a concrete gt4py.next dimension a type (`class I(gtx.Dimensio
 author: havogt
 tags: [type-system, dimensions, type-checking, mypy, mypy-plugin, pyright, nominal-types, metaclass, migration, serialization, frontend, foast, extension-point]
 created: 2026-08-05
-status: proposed
+status: superseded
 ---
+
+> **Superseded** by
+> [[personal/egparedes/connectivities-as-types/connectivities-as-types|Connectivities as types]]
+> (gt4py ADR 0028, GridTools/gt4py#2899), which makes a dimension a class with
+> *type* identity (its qualified name) instead of the `(name, kind)` value
+> identity and interning registry proposed here. Kept for reference until that
+> proposal moves to `shared/`.
 
 > **TL;DR** A concrete dimension is currently an *instance*
 > (`I = Dimension("I")`), so `Field[Dims[I], float64]` is not a valid static
