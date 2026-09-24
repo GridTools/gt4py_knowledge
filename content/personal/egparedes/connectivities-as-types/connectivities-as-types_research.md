@@ -13,9 +13,8 @@ status: draft
 > implementation as it is; the proposal it supports is in the main note.
 
 Line references are against gt4py `main` at `b3c53fa7e` (v1.2.2, 2026-09-03),
-i.e. the tree *before* the implementation (see the main note's Implementation
-section), so this catalogue is a historical record. Paths
-are relative to `src/gt4py/next/` unless they start with `tests/`.
+the tree the PR stack in the main note's Implementation section is based on.
+Paths are relative to `src/gt4py/next/` unless they start with `tests/`.
 
 Related gt4py records:
 [ADR 0019 Connectivities](https://github.com/GridTools/gt4py/blob/main/docs/development/ADRs/next/0019-Connectivities.md),
