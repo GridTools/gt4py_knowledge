@@ -150,8 +150,8 @@ is an ordinary `double`.
 
 A statement can itself be a type: `Proof<P>` has a value only when `P` holds.
 It is checked evidence, not a Boolean. `false` is a valid `bool`, but a false
-statement has no proof. Unfolding the refinement of §4 turns the evidence into
-an explicit argument:
+statement has no proof. Unfolding the `IncidentEdge` refinement of §4 turns
+the evidence into an explicit argument:
 
 ```text
 double weight(Graph g, Vert<g> v, Edge<g> e);                    // body: assert(g.incident(v, e))
@@ -218,8 +218,9 @@ struct Graph {
 ```
 
 Soundness and completeness then hold by definition, because the lists *are* the
-graph. Two conditions remain to establish: every entry is a valid edge, and no
-row repeats one.
+graph. The type of `nbr` makes every entry a valid edge; what remains to prove
+is that no row repeats one. Built from raw integer tables instead, both must be
+established: every entry in range, and no repeats in a row.
 
 ### 7. Parameter or index: does the type identify the graph?
 
@@ -336,9 +337,10 @@ splits data from evidence:
 
 - **Validity of the table's entries (§6).** gt4py uses §6's inverted
   presentation: there is no incidence relation apart from the table, so
-  soundness and completeness (§3) hold by definition. The two conditions that
-  remain are also unchecked: that every non-skip entry is a valid `Codomain`
-  index, and that no row repeats one. The bind-time check reads a table's
+  soundness and completeness (§3) hold by definition. But its tables hold raw
+  integers, not `Fin<nE>`, and both remaining conditions are unchecked: that
+  every non-skip entry is a valid `Codomain` index, and that no row repeats
+  one. The bind-time check reads a table's
   contents only to compare skip positions (below). Well-formed entries are a
   property of the mesh generator.
 - **Per-element ragged degree.** `Fin<degree(g, v)>` becomes
