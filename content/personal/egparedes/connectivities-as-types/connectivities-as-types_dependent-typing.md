@@ -11,8 +11,8 @@ status: draft
 > language with dependent types, and which parts of that picture the
 > Python-level design keeps statically, which it moves to a bind-time check,
 > and which it gives up. Part 1 is a condensed primer, adapted from the note
-> *Dependent typing for imperative programmers — from graph connectivity to
-> checked sparse computations*; part 2 maps it onto gt4py.
+> *Dependent types for the imperative programmer — a walkthrough built on one
+> example: graph incidence*; part 2 maps it onto gt4py.
 
 ## Why this appendix
 
@@ -51,19 +51,27 @@ vertex 3       false  false   true
 ```
 
 Its neighbor lists are `[0]`, `[0, 1, 2]`, `[1]`, `[2]`. The ordinary API
-leaves every interesting condition unstated:
+states none of the conditions that make it correct:
 
 ```text
 List<int> neighbors(Graph g, int v);
 double    weight(Graph g, int v, int e);
 ```
 
-IDs must be in range, the list must be exact, and `weight` needs an incident
-pair — `(0, 1)` has valid IDs but is not an incidence.
+- `v` and `e` must be in range;
+- `neighbors(g, v)` must return exactly the edges incident to `v`, each once;
+- `weight` is meaningful only on incident pairs — `(0, 1)` has valid IDs but
+  is not an incidence.
 
-### 1. Put values in types
+Each of these ends up as an assert, a bounds check or a comment. A dependent
+type states it in the signature instead, and the caller discharges it.
 
-A **type family** selects a type from a parameter, which may be a value:
+### 1. A type can mention a value
+
+`std::array<double, 8>` already has a value in its type, but the value must be
+a compile-time constant. Dependent types drop that restriction: any value in
+scope, including a mesh read at run time, can appear in a type. A **type
+family** selects a type from such a value:
 
 ```text
 Vector<T, n>    // exactly n elements
@@ -75,12 +83,15 @@ type Edge<Graph g> = Fin<g.nE>;
 double get(Nat n, Vector<double, n> a, Fin<n> i);   // the type of i is the bounds check
 ```
 
-The checker reasons symbolically about `n`; it need not know its numeral.
+A `Fin<n>` is a plain integer at run time: the bound is a static claim, not a
+stored field, and it travels with the value, so a function taking `Fin<n>`
+never re-validates it. The checker reasons symbolically about `n`; it need not
+know its numeral.
 
-### 2. Let arguments determine types (Π and Σ)
+### 2. An argument's type can mention another argument (Π types)
 
-A **dependent function type** (Π type) lets an argument determine later
-argument or result types:
+A **dependent function type** (Π type) lets the *value* of an argument
+determine the types of later arguments or of the result:
 
 ```text
 auto   row(Graph g, Vert<g> v) -> Vector<double, degree(g, v)>;
@@ -88,12 +99,8 @@ double at (Graph g, Vert<g> v, Fin<degree(g, v)> k);
 ```
 
 `k` is a **local slot** in `v`'s row, not an edge ID, and its legal range
-changes with `v`. A **dependent pair** (Σ type) packages a value with data
-whose type mentions it:
-
-```text
-struct Row { Nat length; Vector<double, length> data; };
-```
+changes with `v`. Ordinary signatures cannot express this dependency, and
+ragged data needs it.
 
 ### 3. Refinements: say *exactly* the neighbors
 
@@ -107,23 +114,24 @@ type NeighborList<Graph g, Vert<g> v> =
         forall (Edge<g> e) (contains(es, e) == g.incident(v, e));
 ```
 
-— soundness, completeness, uniqueness. Order is extra information: without
-sorting, a row of degree `d` has `d!` valid orderings.
+The predicate states three properties: soundness (every listed edge is
+incident), completeness (every incident edge is listed) and uniqueness. Together
+they force the length to be `degree(g, v)`. Order is extra information: a row
+of degree `d` has `d!` valid orderings, and only an added `sorted(es)` makes
+one of them canonical.
 
-### 4. Proofs are evidence, and can be erased
+### 4. Dependent pairs: a later field mentions an earlier one (Σ types)
 
-`Proof<P>` is checked evidence for `P`, not a Boolean. A loop that scans the
-incidence matrix establishes `NeighborList` by an invariant ("the result holds
-exactly the incident edges examined so far"). Evidence is usually erased
-during compilation; computational data that happens to appear in types —
-lengths, offsets, indices — is not.
-
-### 5. Restrict a field to valid incidences
+`struct Row { int n; double* data; };  // data points at n doubles` — the
+comment is a dependent type. A **dependent pair** (Σ type) packages a value
+with data whose type mentions it:
 
 ```text
+struct Row { Nat length; Vector<double, length> data; };
+
 type IncidentEdge<Graph g, Vert<g> v> = Edge<g> e where g.incident(v, e);
 
-struct Incidence<Graph g> {             // a Σ type: edge's type mentions vertex
+struct Incidence<Graph g> {             // the edge's type mentions the vertex
     Vert<g> vertex;
     IncidentEdge<g, vertex> edge;
 };
@@ -131,31 +139,58 @@ struct Incidence<Graph g> {             // a Σ type: edge's type mentions verte
 type IncidenceField<Graph g> = function(Incidence<g>) -> double;
 ```
 
-The field assigns one value per *incidence*: `(0, 0)` and `(1, 0)` may carry
-different weights although both name edge 0. The dependency restricts the
-**domain**; the output is an ordinary `double`.
+`Incidence<G>{0, 1}` is rejected, so the domain of an `IncidenceField<G>` is
+exactly the set of true entries of the matrix. A Π type accepts *any* vertex;
+a Σ type packages *one* vertex with something valid for it. The field assigns
+one value per *incidence*: `(0, 0)` and `(1, 0)` may carry different weights
+although both name edge 0. The dependency restricts the **domain**; the output
+is an ordinary `double`.
+
+### 5. Proofs are arguments, and are erased
+
+A statement can itself be a type: `Proof<P>` has a value only when `P` holds.
+It is checked evidence, not a Boolean. `false` is a valid `bool`, but a false
+statement has no proof. Unfolding the refinement of §4 turns the evidence into
+an explicit argument:
+
+```text
+double weight(Graph g, Vert<g> v, Edge<g> e);                    // body: assert(g.incident(v, e))
+double weight(Graph g, Vert<g> v, Edge<g> e, Proof<g.incident(v, e)> ok);
+```
+
+The assert fails at run time, inside the callee. The proof is demanded from
+the caller when the call is checked, cannot be forged, and is erased during
+compilation. It is rarely written by hand. A loop that scans the incidence
+matrix establishes `NeighborList` through an invariant ("the result holds
+exactly the incident edges examined so far"), and SMT-backed refinement
+checkers (F\*, Liquid Haskell) discharge most such obligations automatically.
+Only evidence is erased: computational data that appears in types (lengths,
+offsets, indices) stays a run-time value.
 
 ### 6. Edge IDs vs. local slots: the enumeration
 
 The edges above one vertex (its **fiber**) can be addressed by edge ID or by
-local slot. An exact neighbor list is a **bijection** between the two:
+local slot. An exact neighbor list is a **bijection** between the two. Its
+codomain gives soundness, surjectivity gives completeness and injectivity gives
+uniqueness:
 
 ```text
 type NeighborOrder<Graph g> =
     function(Vert<g> v) -> Bijection<Fin<degree(g, v)>, IncidentEdge<g, v>>;
 ```
 
-Once an enumeration is chosen, a field has two equivalent addressings:
+Once an enumeration is chosen, a field has two equivalent addressings, and
+choosing between them means choosing a sparse layout:
 
-| Addressing | Type for a fixed graph `g` | Storage analogy |
-| --- | --- | --- |
-| vertex–edge incidence | `Incidence<g> -> double` | coordinate-based, like COO |
-| vertex–local slot | `(v : Vert<g>) -> Fin<degree(g, v)> -> double` | row-and-slot, like CSR |
+| Addressing | Type for a fixed graph `g` | Needs | Storage analogy |
+| --- | --- | --- | --- |
+| vertex–edge incidence | `Incidence<g> -> double` | the incidence predicate | coordinate-based, like COO |
+| vertex–local slot | `(v : Vert<g>) -> Fin<degree(g, v)> -> double` | the degree function | row-and-slot, like CSR |
 
 Degrees alone define the legal slots but not *which* edge sits in each;
 **reordering the neighbors requires reordering every slot-addressed value
 consistently.** A uniform degree reduces the ragged shape to a rectangular
-array — the edge correspondence still matters. With `nbr : NeighborOrder<g>`
+array, but the edge correspondence still matters. With `nbr : NeighborOrder<g>`
 and `field : IncidenceField<g>`, a neighbor reduction is:
 
 ```text
@@ -167,18 +202,56 @@ double sumAtVertex(Vert<g> v) {
 }
 ```
 
-### 7. Types indexed by a graph do not identify the graph
+Iterating over the range yields a legal slot by construction, and
+`nbr(v).forward(k)` yields an edge together with its incidence evidence, so the
+obligations are met without a single hand-written proof.
 
-Indexing a type by `g` does **not** prove "same type ⇒ same graph": an alias
-may ignore its index, and `Fin<g.nV>` distinguishes bounds, not two meshes
-with the same vertex count. Preventing cross-mesh ID mixing needs an
-**identity-preserving wrapper, or brand**.
+The presentation can also be inverted: make the neighbor lists primitive and
+*derive* incidence from them.
+
+```text
+struct Graph {
+    Nat nV, nE;
+    function(Fin<nV> v) -> Nat degree;
+    function(Fin<nV> v, Fin<degree(v)> k) -> Fin<nE> nbr;   // injective in k, for each v
+};
+```
+
+Soundness and completeness then hold by definition, because the lists *are* the
+graph. Two conditions remain to establish: every entry is a valid edge, and no
+row repeats one.
+
+### 7. Parameter or index: does the type identify the graph?
+
+When the graph is an ordinary argument (a **parameter** of the call), all
+graphs share one type, so passing a vertex of one mesh to `neighbors` on
+another type-checks. To tell graphs apart, the graph must be an **index** of
+the type, e.g. `template<Graph G> struct Mesh`. C++20 allows this only for
+compile-time constants; dependent types also allow a mesh loaded at run time.
+
+Even then, "same type ⇒ same graph" is a checking discipline, not a theorem:
+
+- an alias may ignore its index;
+- `Fin<g.nV>` distinguishes bounds, not two meshes with the same vertex count;
+- two graphs bound at run time have the same type only if they are the same
+  variable, or if a proof of their equality is supplied.
+
+Preventing cross-mesh ID mixing needs an **identity-preserving wrapper, or
+brand**.
 
 ### 8. Validate at boundaries, then reuse the evidence
 
-Runtime input acquires a dependent type through a checked decision
-(`makeIncidence(g, v, e) -> Option<Incidence<g>>`). A graph loaded at run time
-travels with its checked operations:
+The checks do not disappear; they move to the boundary where data enters.
+Inside the program, indices come from constructs that carry their own
+evidence (a range, a neighbor list, an incidence), so nothing there needs
+validation. Runtime input acquires a dependent type once, through a checked
+decision, which is the only way to construct the value:
+
+```text
+auto makeIncidence(Graph g, int v, int e) -> Option<Incidence<g>>;
+```
+
+A graph loaded at run time travels with its checked operations:
 
 ```text
 type NeighborsFor<Graph g> = function(Vert<g> v) -> NeighborList<g, v>;
@@ -190,13 +263,17 @@ struct GraphPackage {
 };
 ```
 
-The loader proves the contracts once; consumers reuse them. Evidence is valid
-only for the graph it describes — a mutated or different graph needs a new
-check. The trade-off is proof work at construction points in exchange for
-guarantees everywhere downstream; validated constructors and branded ID
-wrappers offer part of this discipline in ordinary languages.
+The loader establishes the contracts once, and consumers reuse them. Evidence
+is valid only for the graph it describes; a mutated or different graph needs a
+new check. Without full dependent types, a **middle road** keeps most of this
+discipline and drops the proof burden: branded index types, validated
+constructors, and assertions at the boundary.
 
 ## Part 2 — What gt4py can keep of it
+
+gt4py takes §8's middle road: connectivity and dimension classes are the
+brands, `check_offset_provider` is the validated constructor, and nothing is
+proved.
 
 ### The dictionary
 
@@ -206,7 +283,7 @@ wrappers offer part of this discipline in ordinary languages.
 | `Fin<degree(g, v)>` — local slot, depends on `g` *and* `v` | `V2EDim = Dimension("V2E", LOCAL)`, a free name | `V2E.Local`: depends on the **declaration** `V2E` (nominally, by nesting), not on `g` or `v` |
 | `degree(g, v)` bounded by the padded row length | `max_neighbors` on the table's type | `max_neighbors` / `min_neighbors`: optional class keywords stored on `V2E.Local`, else taken from the table |
 | `Option`-valued slots of a padded ragged row | `skip_value` (−1) in the table | same; if `min_neighbors` is declared, skip values must be present iff `min_neighbors < max_neighbors` |
-| `NeighborOrder<g>` — the enumeration | a `NeighborTable` / `NdArrayConnectivityField` | unchanged: the table *is* the enumeration |
+| `NeighborOrder<g>` — the enumeration | a `NeighborTable` / `NdArrayConnectivityField` | unchanged: the table *is* the enumeration and, in §6's inverted presentation, the graph |
 | `(v : Vert<g>) -> Fin<degree(g, v)> -> double` — slot-addressed field | `Field[Dims[V, V2EDim], float]` | `Field[Dims[V, V2E.Local], float]` |
 | `Incidence<g>` — a Σ-typed position | an untyped `{"Vertex": 3, "V2E": 2}` dict | `MultiDimensionIndex(V(3), V2E.Local(2))`; checked at run time that `V2E.Local` indexes the neighbors of a `V` (the dependency of the second component on the first, but not on the value `3`) |
 | the graph value `g` in the signature | a string-keyed `offset_provider` | a bound connectivity: `{V2E: table}` binds the class to one table per binding context |
@@ -237,7 +314,7 @@ wrappers offer part of this discipline in ordinary languages.
 ### What moves to a bind-time check
 
 Python has no value-indexed types, so the dependency on the table value `g`
-cannot be expressed. The design splits the connectivity type the way §4
+cannot be expressed. The design splits the connectivity type the way §5
 splits data from evidence:
 
 - The **class** `V2E` is the static, erasable part: `Domain`, `Codomain`,
@@ -250,24 +327,28 @@ splits data from evidence:
   `max_neighbors` and not below a declared `min_neighbors`, and — if
   `min_neighbors` is declared — its skip values consistent with it.
 - **Undeclared counts are taken from the table** when a variant is compiled.
-  In §4's terms the counts are computational data that appear in types and
+  In §5's terms the counts are computational data that appear in types and
   are *not* erased; they are specialised on per compiled variant rather than
   fixed in the source. The main note's *Binding model* explains why a
   static-only count would bind DSL source to one mesh family.
 
 ### What is given up (and why that is acceptable)
 
-- **Soundness and completeness of the table (§3).** Nothing checks that a
-  table lists *exactly* the incident entities, without duplicates. That is a
-  property of the mesh generator, and gt4py never has the incidence relation
-  independently of the table to check it against.
+- **Validity of the table's entries (§6).** gt4py uses §6's inverted
+  presentation: there is no incidence relation apart from the table, so
+  soundness and completeness (§3) hold by definition. The two conditions that
+  remain are also unchecked: that every non-skip entry is a valid `Codomain`
+  index, and that no row repeats one. The bind-time check reads a table's
+  contents only to compare skip positions (below). Well-formed entries are a
+  property of the mesh generator.
 - **Per-element ragged degree.** `Fin<degree(g, v)>` becomes
   `Fin<max_neighbors>` plus skip values, i.e. the padded, rectangular
   representation of §6. `min_neighbors == max_neighbors` is exactly the
   uniform-degree case, which is why it is equivalent to "no skip values".
 - **Same type ⇒ same table (§7).** `V2E` does not identify a mesh. Two
   different tables bound to `V2E` in two binding contexts give two different,
-  both well-typed, programs. This is deliberate — it is what lets one DSL
+  both well-typed, programs: the table is a *parameter* of the binding context,
+  not an *index* of the type. This is deliberate — it is what lets one DSL
   source run on several meshes — and the one-table-per-declaration dict keeps
   it from becoming ambiguous *within* a context. Guarding against mixing meshes across
   calls (e.g. a field computed on mesh A consumed on mesh B) is out of scope;
