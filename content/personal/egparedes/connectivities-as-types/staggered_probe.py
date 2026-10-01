@@ -8,7 +8,10 @@ CartesianAxisIndex"), and nothing else. The `must be ACCEPTED` lines are the
 point of placing the two axis levels *below* `DimensionIndex` rather than above
 it: a staggered dimension stays a `DimensionIndex`, so no `type[DimensionIndex]`
 annotation in the gt4py tree widens, and `LocalDimensionIndex` keeps its
-position.
+position. P4 covers the fourth row of the note's "four checks become static"
+table — index arithmetic restricted to an axis by a self-type on
+`DimensionMeta.__add__` — including the two definition-site suppressions that
+restriction costs (see the comment on `DimensionMeta`).
 
 Only the *static* declarations are modelled. At runtime `Staggered` is a
 metaclass subscription building one interned class per base, and
@@ -16,8 +19,8 @@ metaclass subscription building one interned class per base, and
 `type[...]` validation is unaffected — see the main note.
 
 Last run: mypy 2.3.1 and pyright 1.1.414 (2026-10-01). Both report exactly the
-nine `EXPECT-ERROR` lines and nothing else (mypy emits two diagnostics for the
-`Doubly` alias, pyright one), so every `must be ACCEPTED` line holds.
+eleven `EXPECT-ERROR` lines and nothing else — mypy 12 diagnostics (two for the
+`Doubly` alias), pyright 11 — so every `must be ACCEPTED` line holds.
 """
 
 from __future__ import annotations
@@ -27,7 +30,27 @@ from typing import ClassVar, TypeAlias
 # ---------------- the hierarchy ----------------
 
 
-class DimensionIndex:
+class Connectivity: ...
+
+
+class DimensionMeta(type):
+    # Restricting index arithmetic to an axis needs a self-type on a metaclass
+    # method. BOTH checkers reject that at the *definition* site, with different
+    # diagnostics, so two separately-spelled suppressions are required:
+    #   mypy    : "self" parameter missing for a non-static method
+    #             (or an invalid type for self)            [misc]
+    #   pyright : Type of parameter "cls" must be a supertype of its class
+    #             "DimensionMeta"       (reportGeneralTypeIssues)
+    # Both bind the annotated signature correctly at every call site — which is
+    # what P4 below checks.
+    def __add__(  # type: ignore[misc]
+        cls: type[AnyCartesianAxisIndex],  # pyright: ignore[reportGeneralTypeIssues]
+        offset: int | float,
+    ) -> Connectivity:
+        raise NotImplementedError
+
+
+class DimensionIndex(metaclass=DimensionMeta):
     """The root. Mesh locations and geometry-less index spaces are direct subclasses."""
 
     value: int
@@ -143,3 +166,13 @@ p3_declared_axis(I)  # must be ACCEPTED
 p3_declared_axis(Staggered[I])  # EXPECT-ERROR: derived, not declared
 p3_declared_axis(C)  # EXPECT-ERROR: mesh location
 p3_declared_axis(V2E.Local)  # EXPECT-ERROR: local dimension
+
+
+# ---------------- P4: the `__add__` self-type restricts index arithmetic ----------------
+
+
+_ok_axis = I + 1  # must be ACCEPTED
+_ok_staggered = Staggered[I] + 1  # must be ACCEPTED: a staggered dim is still an axis
+_ok_half = K + 0.5  # must be ACCEPTED
+_bad_location = C + 1  # EXPECT-ERROR: a mesh location has no index arithmetic
+_bad_local = V2E.Local + 1  # EXPECT-ERROR: a local dimension has no index arithmetic

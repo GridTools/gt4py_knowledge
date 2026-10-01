@@ -40,8 +40,8 @@ named by *entity pair*: `edge_node_connectivity` (required for 1D),
 (`nMaxMesh2_face_nodes`) with a required `_FillValue`; each connectivity carries
 `start_index` ∈ {0, 1}. A data variable carries `mesh = "Mesh2"` and
 `location` ∈ {`node`, `edge`, `face`, `volume`}, or `location_index_set` for
-data on a subset. Face corner nodes are required to be ordered anticlockwise as
-viewed from above.
+data on a subset. Face corner nodes *should* be ordered anticlockwise as viewed
+from above — a recommendation, not a requirement.
 
 **SGRID.** A variable with `cf_role = "grid_topology"`, `topology_dimension` ∈
 {2, 3}, `node_dimensions`, and `face_dimensions` (2D) or `volume_dimensions`
@@ -80,7 +80,7 @@ enumerates as 2ⁿ location names, and it does not stop at three axes.
 | Convention feature | This design | Verdict |
 | --- | --- | --- |
 | Connectivities named by entity pair (`face_node_connectivity`) | `NeighborConnectivity[Domain, Codomain]` — `face_node_connectivity` ≡ `NeighborConnectivity[Face, Node]` | isomorphic. The `Domain`/`Codomain` naming matches UGRID's reading direction, where `source`/`target` did not |
-| `_FillValue` required on ragged arrays; its *absence* means fixed valence; `nMaxMesh2_face_nodes` | `skip_value`, `max_neighbors`, `min_neighbors` on `NeighborTableType` | strictly more informative. ICON's icosahedron carries 12 pentagons among hexagons, so `V2E` is `min_neighbors=5, max_neighbors=6`; UGRID can only record max 6 plus fill. That is the sketch's example verbatim |
+| `_FillValue` required wherever an entry may be absent — ragged valence, but also a missing boundary neighbour in `edge_face_connectivity` / `face_face_connectivity`; `nMaxMesh2_face_nodes` | `skip_value`, `max_neighbors`, `min_neighbors` on `NeighborTableType` | strictly more informative. ICON's icosahedron carries 12 pentagons among hexagons, so `V2E` is `min_neighbors=5, max_neighbors=6`; UGRID can only record max 6 plus fill. That is the sketch's example verbatim |
 | `vertical_dimensions` uses **the same** padding syntax as `face_dimensions` | — | the vertical is just another axis pair. SGRID needs no "vertical kind", which supports the conclusion that `DimensionKind.VERTICAL` is a layout and scan artefact, not geometry (main note, open question 6) |
 | `face_dimensions` specifies a padding **per axis** | a per-axis alignment, never grid-wide | supports the shape of the alignment follow-up (open question 5): a class keyword on the axis |
 | 3D topology forbidden for layered grids; use 2D + `vertical_dimensions` | horizontal topology plus a separate vertical axis | validates the existing split |
@@ -99,7 +99,7 @@ This is the sharpest interaction. Verbatim from the SGRID spec:
 The format is `face_dimension1: node_dimension1 (padding: type1) …`, and
 `layer_dimension: layer_interface_dimension (padding: type)` — derived dimension
 first, node dimension second. Decoding each value into array positions (netCDF
-dimensions are always 0-based) with `n` the node count:
+dimension indices are 0-based; see the qualification under (i)) with `n` the node count:
 
 | padding | cells | cell `j` spans nodes | cell `j` at node-position | as one absolute `UnitRange` under ADR 0026 |
 | --- | --- | --- | --- | --- |
@@ -111,13 +111,20 @@ dimensions are always 0-based) with `n` the node count:
 Three conclusions, and they do not all point the same way.
 
 **(i) The decision that extents are declared rather than derived is vindicated,
-and the range model is strictly more expressive than the padding enum.** Each of
-the four values is one absolute `UnitRange` under a *single* alignment
-convention, and that works precisely because a gt4py range carries a `start`
-while a netCDF dimension does not. The range model also reaches arbitrary halo
-depth, which `padding` cannot express at all. Had the design derived
-`Staggered[D]`'s extent from `D`'s, it would have been wrong for three of
-SGRID's four cases.
+and the range model is the more expressive of the two.** Each of the four values
+is one absolute `UnitRange` under a *single* alignment convention. The range model
+also reaches arbitrary halo depth, which `padding` cannot express at all, and had
+the design derived `Staggered[D]`'s extent from `D`'s it would have been wrong for
+three of SGRID's four cases.
+
+Two qualifications on "more expressive". The `UnitRange` column above is a correct
+*relative* decoding; its absolute origin is a choice, because SGRID does have a
+mechanism for absolute numbering that `padding` alone does not show — integer
+coordinate variables (`face(face)`, `node(node)`), which the Delft3D example uses
+to number layer interfaces `0 … KMAX` while everything else counts from 1. So
+netCDF *dimensions* are 0-based but SGRID *labels* need not be. What a `UnitRange`
+still adds is that the origin travels with the dimension in one object rather than
+in a separate coordinate variable, and that halo depth is unbounded.
 
 **(ii) `padding: low` is this note's halo remark, standardized.** The main note
 observes that `Staggered[I](0)` "is the first cell outside the complex — exactly
@@ -166,9 +173,13 @@ absolute-range argument as §3(i).
 
 ### (c) Record the orientation guarantee so incidence signs become derivable
 
-UGRID requires face corner nodes "in anticlockwise … direction as viewed from
-above". That makes the incidence signs — the `d` of `div = ⋆d⋆` — **derivable
-from `face_node_connectivity`** instead of supplied. The main note explains why
+UGRID says face corner nodes "should be specified in anticlockwise (also referred
+to as counterclockwise) direction as viewed from above". Where that holds, the
+incidence signs — the `d` of `div = ⋆d⋆` — are **derivable from
+`face_node_connectivity`** instead of supplied. Note the modal verb: the
+convention *recommends* the ordering rather than mandating it, so a consumer
+cannot assume it — which is exactly why a gt4py-side declaration would have to
+record the guarantee rather than infer it. The main note explains why
 the Cartesian side needs no orientation data (a product of intervals is
 canonically oriented per axis) and points at ICON's `geofac_div` for the
 unstructured side, where the signs are materialized. UGRID shows the
@@ -182,10 +193,11 @@ it is the cheapest bridge between the two notes.
 
 UGRID had to add `face_dimension` and `edge_dimension` attributes purely to
 disambiguate which netCDF dimension indexes the mesh element, because a global
-ordering rule proved insufficient. That is the same failure mode as constraint
-F4 — dimension *names* determining memory layout through `order_dimensions` —
-and it supports the conclusion that layout belongs to the field or the grid
-rather than to a global rule keyed on `kind`.
+ordering rule proved insufficient. The mechanisms differ — UGRID has to *record*
+which stored axis is the element axis, whereas F4 *derives* layout from dimension
+names through `order_dimensions` — but the premise that failed is the same in
+both: that one global rule can fix dimension order. It supports the conclusion
+that layout belongs to the field or the grid.
 
 ## 5. For the mesh and field-data proposals
 
