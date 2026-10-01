@@ -29,7 +29,7 @@ One declaration for offset, local dimension and provider key
 
 ADR 0029 (dimensions) · ADR 0030 (connectivities) · GridTools/gt4py#2917
 
-> **Appendix** to [Connectivities as types](connectivities-as-types), summarising that note as of commit `21e6b8f`. Every slide links the section it compresses and this deck adds no facts of its own, so where the two disagree the note wins. Rendering instructions are on the slide before this one.
+> **Appendix** to [Connectivities as types](connectivities-as-types), summarising that note as of commit `8292eff`. Every slide links the section it compresses and this deck adds no facts of its own, so where the two disagree the note wins. Rendering instructions are on the slide before this one.
 
 ---
 
