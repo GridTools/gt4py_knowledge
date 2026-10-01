@@ -1,7 +1,7 @@
 ---
 title: A discretization-independent surface syntax for finite-difference computations
 author: egparedes
-tags: [finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, pace, pmap, fv3, ifs-fvm, arakawa-staggering, c-grid, d-grid, a-grid, dynamical-core, hevi, vertical-solve, elliptic-solve, mpdata, semi-implicit, miura, atlas, prior-art, dsl-design]
+tags: [finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, cw-complex, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, pace, pmap, fv3, ifs-fvm, arakawa-staggering, c-grid, d-grid, a-grid, dynamical-core, hevi, vertical-solve, elliptic-solve, mpdata, semi-implicit, miura, atlas, prior-art, dsl-design]
 created: 2026-06-30
 status: draft
 ---
@@ -129,6 +129,8 @@ Its companion in documentation is the **stencil molecule** — a figure that *on
 ```
 
 There is no analogous molecule for an unstructured operator: the "stencil" is a variable-valence patch, so unstructured papers draw a representative hexagon/triangle and rely on the connectivity-sum form instead.
+
+Per axis, the half-index pair is the two cell classes of a 1-dimensional CW complex — the 0-cells and 1-cells of a path, or of a cycle if the axis is periodic — and in more than one dimension the grid is their **product** complex, so a cell class is one staggering bit per axis and the cell degree is the number of set bits. That is the structure [[personal/egparedes/connectivities-as-types/connectivities-as-types|Connectivities as types]] encodes in the type system, as `Staggered[D]` over a declared axis dimension; the `HLoc`/`VLoc` location types of §7.1 sit above it, and a per-axis bit vector is strictly finer than a form degree (it keeps the two edge families of §6.4 apart, which `k = 1` alone does not).
 
 ### 3.4 Connectivity-sum notation — *FV / mimetic FD on unstructured grids*
 
