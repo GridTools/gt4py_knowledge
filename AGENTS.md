@@ -40,9 +40,10 @@ content/
   external prior art) that proposals can cite. These are not proposals: they use
   plain `title`/`description`/`tags` frontmatter with no `author` or `status`,
   and they are indexed under **Knowledge** in `content/index.md`.
-- **`archive/`** — flat directory of retired proposals (superseded or
-  abandoned). Kept in git so they are not lost, but excluded from the published
-  site. See [Retiring a proposal](#retiring-a-proposal).
+- **`archive/`** — retired proposals (superseded or abandoned), one per
+  proposal with no `<person>/` level: `<slug>.md`, or `<slug>/` for a
+  multi-file proposal. Kept in git so they are not lost, but excluded from the
+  published site. See [Retiring a proposal](#retiring-a-proposal).
 - An accepted idea that becomes concrete graduates to real work in gt4py (a PR,
   or a formal ADR in the gt4py repo); it can then be retired from here.
 
@@ -129,7 +130,9 @@ A proposal that is superseded or abandoned (but worth keeping) moves to
    plus what supersedes it). The comment is not rendered, but keeps the archived
    idea visible to anyone cross-checking a new proposal against the source.
 4. Rewrite every inbound `[[wikilink]]` from published documents into a plain
-   GitHub link (`[label](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/<slug>.md)`);
+   GitHub link to its archived path
+   (`[label](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/<slug>.md)`,
+   or `…/archive/<slug>/<slug>.md` for a multi-file proposal);
    a wikilink to an unpublished note is a dead link on the site. Wikilinks
    *inside* archived documents can stay as they are.
 
