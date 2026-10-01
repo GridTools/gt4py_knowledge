@@ -844,6 +844,10 @@ ICON4Py.
   reconciled. The two probes are its attachments.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_alternatives|Alternatives considered]]:
   the alternatives rejected on grounds other than the axis levels.
+- [[personal/egparedes/connectivities-as-types/connectivities-as-types_slides|Slides: a walk-through deck]]:
+  a twelve-slide summary of this note for the design review, readable as a page and
+  renderable with `marp-cli`. It adds no facts and links the section each slide
+  compresses.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_research|Tag and name constraints — full catalogue]]:
   the five name spaces; the 10 cross-object identity constraints (A1–A10),
   9 name-format constraints (F1–F9) and 7 structural constraints (S1–S7),
