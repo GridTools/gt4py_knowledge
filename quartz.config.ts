@@ -16,8 +16,8 @@ const config: QuartzConfig = {
     locale: "en-US",
     // NOTE: must match the GitHub Pages URL of wherever this repo finally lives.
     baseUrl: "gridtools.github.io/gt4py_knowledge",
-    // Folders excluded from the published site (templates/scratch/Obsidian dirs).
-    ignorePatterns: ["private", "templates", ".obsidian"],
+    // Folders excluded from the published site (templates/scratch/archive/Obsidian dirs).
+    ignorePatterns: ["private", "templates", "archive", ".obsidian"],
     defaultDateType: "modified",
     theme: {
       fontOrigin: "googleFonts",

@@ -27,6 +27,7 @@ content/
   knowledge/            # reference material proposals lean on (not proposals)
     <topic>/                    # one subdirectory per topic area
       <note>.md                 # a reference note
+  archive/              # retired proposals, kept in git (NOT published — see ignorePatterns)
   templates/            # idea template (NOT published — see ignorePatterns)
 ```
 
@@ -39,6 +40,9 @@ content/
   external prior art) that proposals can cite. These are not proposals: they use
   plain `title`/`description`/`tags` frontmatter with no `author` or `status`,
   and they are indexed under **Knowledge** in `content/index.md`.
+- **`archive/`** — flat directory of retired proposals (superseded or
+  abandoned). Kept in git so they are not lost, but excluded from the published
+  site. See [Retiring a proposal](#retiring-a-proposal).
 - An accepted idea that becomes concrete graduates to real work in gt4py (a PR,
   or a formal ADR in the gt4py repo); it can then be retired from here.
 
@@ -64,6 +68,7 @@ content/
    - `reviewed` — at least one person (e.g. the author) has reviewed the content.
    - `final` — clear proposal that could be implemented, but should still be reviewed
       by another person.
+   - `retired` — superseded or abandoned; only for documents in `archive/`.
 
 3. Before writing, **skim the index and existing proposals** for overlap; link
    related/conflicting documents with `[[wikilinks]]` and call out the conflict
@@ -109,10 +114,29 @@ and agents consult. It must stay current and keyword-rich:
 - Prefer one consistent keyword vocabulary across entries (e.g. reuse `dace`,
   `unstructured`, `type-system`) so related ideas cluster and conflicts surface.
 
+## Retiring a proposal
+
+A proposal that is superseded or abandoned (but worth keeping) moves to
+`content/archive/`, which is excluded from the published site. In one change:
+
+1. `git mv` it to `content/archive/<slug>.md` (a multi-file proposal moves as
+   its whole `<slug>/` directory). Retiring a `shared/` proposal needs PR review
+   like any other `shared/` change.
+2. Set `status: retired` and, if it was superseded, add
+   `superseded_by: <path/to/note>` to its frontmatter.
+3. Remove its entry from **Personal**/**Shared** in `content/index.md` and add
+   it to the `Archived` HTML comment at the bottom of the index (same keywords,
+   plus what supersedes it). The comment is not rendered, but keeps the archived
+   idea visible to anyone cross-checking a new proposal against the source.
+4. Rewrite every inbound `[[wikilink]]` from published documents into a plain
+   GitHub link (`[label](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/<slug>.md)`);
+   a wikilink to an unpublished note is a dead link on the site. Wikilinks
+   *inside* archived documents can stay as they are.
+
 ## Publishing notes
 
 - `baseUrl` in `quartz.config.ts` must match the final GitHub Pages URL of this
   repo; update it if the repo moves.
-- Anything under `templates/`, `private/`, or `.obsidian/` is excluded from the
+- Anything under `templates/`, `private/`, `archive/`, or `.obsidian/` is excluded from the
   published site (`ignorePatterns`). Use `draft: true` in frontmatter to keep an
   in-progress note out of the published site while still committing it.

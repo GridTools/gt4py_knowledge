@@ -88,7 +88,7 @@ class DimensionMeta(type):
     # covers both, so `Dimension("I")` and `Dimension("I", VERTICAL)` are neither
     # equal nor hash-equal. The prototype ignores `kind` because it only ever
     # declares horizontal dimensions; a real implementation must include it (see
-    # `shared/dimensions-as-types`, "Design").
+    # `archive/dimensions-as-types`, "Design").
     def __eq__(cls, other: object) -> bool:
         if isinstance(other, DimensionMeta) or type(other).__name__ == "Dimension":
             return cls.value == other.value  # type: ignore[attr-defined]

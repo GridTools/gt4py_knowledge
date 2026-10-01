@@ -13,8 +13,8 @@ status: draft
 > constructor, and **dimension variables** (`TypeVar`/`TypeVarTuple` over
 > dimensions) so field operators can be generic in their dimensions.
 
-> **Part I has been extracted** into [[shared/dimensions-as-types|Dimensions as
-> types]]. §3 below is now a stub keeping only what Parts II and III refer back
+> **Part I has been extracted** into [Dimensions as
+> types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md). §3 below is now a stub keeping only what Parts II and III refer back
 > to; the requirements, rejected alternatives, migration plan and risks of the
 > base live in the shared document. Parts II and III stay here.
 
@@ -120,7 +120,7 @@ redesign of §3; with today's instance-dimensions it indeed is not.
 
 ## 3. Part I — dimensions as types
 
-**Extracted** to [[shared/dimensions-as-types|Dimensions as types]], together
+**Extracted** to [Dimensions as types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md), together
 with its requirements, the rejected alternatives, the migration plan and the
 mypy-plugin removal it enables. Repeated here only insofar as Parts II and III
 below refer back to it:
@@ -707,7 +707,7 @@ Stages 0–2 of the dtype plan are prerequisites for the *frontend* stages here
 (the binding utilities are shared); Part I/II stages are independent of dtype.
 
 1. **Stage D0 — dimensions as types in `common`** (Part I): specified in
-   [[shared/dimensions-as-types|Dimensions as types]]; prerequisite for every
+   [Dimensions as types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md); prerequisite for every
    stage below.
 2. **Stage D1 — typed shifts & staggering, static side** (Part II):
    `Staggered`, typed `Connectivity`, generated `Field.__call__` overloads;
@@ -727,7 +727,7 @@ Stages 0–2 of the dtype plan are prerequisites for the *frontend* stages here
 ## 10. Risks and open questions
 
 1. **The metaclass-overload mypy quirk** (see
-   [[shared/dimensions-as-types|Dimensions as types]]): call-site behavior is
+   [Dimensions as types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md)): call-site behavior is
    correct but the def-site suppression could break on a mypy upgrade; pinned
    by tests, with a notation-only fallback. Re-verified on **mypy 2.3**
    (2026-08-05) — the quirk and the suppression both still behave as described,
@@ -740,7 +740,7 @@ Stages 0–2 of the dtype plan are prerequisites for the *frontend* stages here
    substitution operation is small (≤ 15), but `Field` has many operators;
    measure mypy runtime on a large downstream consumer before generalizing.
 4. **Migration surface of Part I** is the largest cost item overall; it is
-   tracked in [[shared/dimensions-as-types|Dimensions as types]], not here.
+   tracked in [Dimensions as types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md), not here.
 5. **Canonical dims ordering with variables**: `Dims[D, K]` assumes the
    binding of `D` sorts before `K`; substitution re-validates, so a "wrongly
    ordered" binding today raises a validator error — decide whether to
