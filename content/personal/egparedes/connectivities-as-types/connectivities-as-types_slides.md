@@ -27,7 +27,7 @@ npx -y @marp-team/marp-cli@4 --no-stdin \
 
 One declaration for offset, local dimension and provider key
 
-ADR 0028 (dimensions) · ADR 0029 (connectivities) · GridTools/gt4py#2917
+ADR 0029 (dimensions) · ADR 0030 (connectivities) · GridTools/gt4py#2917
 
 > **Appendix** to [Connectivities as types](connectivities-as-types), summarising that note as of commit `21e6b8f`. Every slide links the section it compresses and this deck adds no facts of its own, so where the two disagree the note wins. Rendering instructions are on the slide before this one.
 
@@ -164,8 +164,8 @@ Of ten cross-object identity constraints: **six dissolve**, three collapse into 
 
 | PR | Contents |
 | --- | --- |
-| A #2899 | dimensions as classes, `Staggered[D]`, ADR 0028 |
-| B #2907 | `NeighborConnectivity`, `LocalDimensionIndex`, ADR 0029 |
+| A #2899 | dimensions as classes, `Staggered[D]`, ADR 0029 |
+| B #2907 | `NeighborConnectivity`, `LocalDimensionIndex`, ADR 0030 |
 | C #2910 | class-keyed providers, `FieldOffset` removed, migration script |
 | D #2912 | `MultiDimensionIndex`, typed embedded positions |
 

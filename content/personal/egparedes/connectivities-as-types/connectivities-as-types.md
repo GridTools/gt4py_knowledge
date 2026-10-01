@@ -12,7 +12,7 @@ status: draft
 > `FieldOffset` tag, the local `Dimension` name and the `offset_provider` key —
 > plus a fourth, hidden one: the Python variable the `FieldOffset` is bound to.
 > Make the connectivity a **class** that *contains* its local dimension, is its
-> own provider key, and whose identity — like every dimension's (ADR 0028) — is
+> own provider key, and whose identity — like every dimension's (ADR 0029) — is
 > its qualified Python name. In the IR it is named by its local dimension's
 > tag, so shifts, reductions and sparse arguments all find the table under one
 > string:
@@ -34,8 +34,8 @@ status: draft
 
 > **Implementation.** The design below is implemented on the stacked
 > GridTools/gt4py PRs listed in [Implementation](#implementation) (top branch
-> `connectivities-as-types-8-typed-positions`), with ADR 0028 (dimensions as
-> nominal types) and ADR 0029 (connectivities as types). The *Problem* section
+> `connectivities-as-types-8-typed-positions`), with ADR 0029 (dimensions as
+> nominal types) and ADR 0030 (connectivities as types). The *Problem* section
 > and the constraint catalogue in the appendix
 > [[personal/egparedes/connectivities-as-types/connectivities-as-types_research|Tag and name constraints — full catalogue]]
 > describe gt4py `main` (`b3c53fa7e`, v1.2.2), the tree the stack is based on.
@@ -56,7 +56,7 @@ status: draft
 > [[personal/havogt/dimension-generic-fields/dimension-generic-fields|Generic dimensions and statically
 > typed staggering]], whose Part II also proposed the `Staggered[D]` shape
 > used here. It **supersedes** [[shared/dimensions-as-types|Dimensions as
-> types]]: the dimension design below (ADR 0028) replaces that note's
+> types]]: the dimension design below (ADR 0029) replaces that note's
 > `(name, kind)` value identity and interning registry with type identity, and
 > is stated here in full. It overlaps with
 > [[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos|A mesh concept with
@@ -150,7 +150,7 @@ what is one idea — *a mapping between two index spaces, plus a name for it*.
 
 | Concept | Role | Replaces |
 | --- | --- | --- |
-| `DimensionIndex` | a dimension is a subclass, an index along it an instance (ADR 0028); the root — mesh locations, axes and local dimensions are all subclasses, so every `type[DimensionIndex]` annotation in the tree keeps its meaning | `Dimension` instances |
+| `DimensionIndex` | a dimension is a subclass, an index along it an instance (ADR 0029); the root — mesh locations, axes and local dimensions are all subclasses, so every `type[DimensionIndex]` annotation in the tree keeps its meaning | `Dimension` instances |
 | `CartesianAxisIndex(AnyCartesianAxisIndex)` | a **declared Cartesian axis**: an index space with integer index arithmetic and exactly one staggered partner (see [Cartesian axis dimensions](#cartesian-axis-dimensions)). `AnyCartesianAxisIndex` is either cell class of such an axis, declared or derived | — (new; today `kind != LOCAL` is the nearest approximation, and it does not separate a Cartesian axis from a mesh location) |
 | `Staggered[D: CartesianAxisIndex]` | the axis's derived partner, at the half-integer positions of `D`; a real, interned class (see [`Staggered[D]`](#staggeredd)) | the `_Staggered` name prefix |
 | `LocalDimensionIndex(DimensionIndex)` | a local dimension: **owned** (declared nested in, or adopted by, its connectivity), or **owner-less** (optionally with `size=n`, which sets `max_neighbors = min_neighbors = n`); carries the neighbor counts | `Dimension(..., kind=LOCAL)`, `_CONST_DIM` |
@@ -235,7 +235,7 @@ use for `a(V2E)`. The iterator-level `it_ts.OffsetLiteralType` /
 ### Sketch
 
 ```python
-# ── dimensions (ADR 0028) ─────────────────────────────────────────────────
+# ── dimensions (ADR 0029) ─────────────────────────────────────────────────
 class DimensionMeta(type):
     @property
     def tag(cls) -> Tag:                       # identity, and the IR spelling
@@ -282,7 +282,7 @@ Staggered[KDim]                                # KDim's derived partner;
                                                #   Staggered[Staggered[KDim]] is a type error
 
 
-# ── connectivities (ADR 0029) ─────────────────────────────────────────────
+# ── connectivities (ADR 0030) ─────────────────────────────────────────────
 class ConnectivityMeta(type):
     tag: Tag                                   # the declaration's qualified name
     offset_tag: Tag                            # how the IR names it, see "Identity"
@@ -394,7 +394,7 @@ stated as rules:
    not injective.
 6. **Staggering is part of the dimension change.** The `_Staggered` name prefix
    needs the name→class lookup that type identity removes, so `Staggered[D]` is a
-   real class and part of ADR 0028 (PR A), with its parameter bounded on a
+   real class and part of ADR 0029 (PR A), with its parameter bounded on a
    declared [Cartesian axis](#cartesian-axis-dimensions).
 
    Rules 3–6 in full — the hook, the fingerprint deconstructors, the exhaustive
@@ -414,7 +414,7 @@ stated as rules:
    truth value. The residual hazard is narrow and accepted: a dict holding both an
    integer key and a dimension-class key whose hashes collide would reach
    `bool(Domain)`. Class-keyed providers hold only classes and tag strings, and a
-   `str` compares unequal to a class, so they cannot. ADR 0028 records this.
+   `str` compares unequal to a class, so they cannot. ADR 0029 records this.
 9. **Same-named declarations are different connectivities.** Two
    declarations with the same qualified name from different modules, or a
    redefinition, are simply different classes; no warning is issued, and
@@ -652,7 +652,7 @@ tables assign different neighbors to the same domain element. The model:
   in the local dimension, is an `arg-type` error, probe P1b), while a `Local`
   generated in `__init_subclass__` and
   annotated `ClassVar[type[LocalDimensionIndex]]` on the base is rejected by
-  both as *not valid as a type* — the very error class ADR 0028 exists to
+  both as *not valid as a type* — the very error class ADR 0029 exists to
   remove. Two lines per connectivity buy a real type; ICON4Py has 16
   declarations. Its tag is `<owner tag>.Local`, unique by construction.
 - `Local` is **not** passed through the base subscription
@@ -765,12 +765,12 @@ equality with an interning registry; and static-only `max_neighbors` /
 ## Relation to gt4py ADRs
 
 - **ADR 0019 (Connectivities).** The part naming `FieldOffset` as the frontend
-  identifier is superseded by ADR 0029; the `Connectivity` / `NeighborTable` /
+  identifier is superseded by ADR 0030; the `Connectivity` / `NeighborTable` /
   `ConnectivityType` vocabulary is kept ([What stays](#what-stays-and-why)).
 - **ADR 0026 (Staggered dimensions).** Its encoding is superseded by
   `Staggered[D]` ([above](#staggeredd)); its semantics are unchanged, and
   [Cartesian axis dimensions](#cartesian-axis-dimensions) states the structure they encode.
-- **ADR 0028 (Dimensions as nominal types)** and **ADR 0029 (Connectivities
+- **ADR 0029 (Dimensions as nominal types)** and **ADR 0030 (Connectivities
   as types)** record this design in the gt4py tree.
 - **ADR 0023 (build cache).** Fingerprints depend on qualified names, so the
   cache invalidates on module renames (Identity, rule 4).
@@ -842,14 +842,14 @@ on its own, each based on the previous one:
 
 | PR | Branch | What |
 | --- | --- | --- |
-| A: GridTools/gt4py#2899 | `connectivities-as-types-2-dimension-classes` | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0028); `codegen_name`; `CartesianAxisIndex` / `AnyCartesianAxisIndex` (both exported from `gtx`) and `Staggered[D: CartesianAxisIndex]`, with `__add__`/`__sub__` restricted to an axis statically and at runtime; interactive-`__main__` fallback; `NamedIndex` and the dimension half of the mypy plugin removed; `ConstList` with `size=1` replaces the `_CONST_DIM` aliases; `AxisLiteral` drops `kind`; printing IR never imports (`resolve_loaded`); offset tag = local dimension tag = provider key in the tree |
-| B: GridTools/gt4py#2907 | `connectivities-as-types-3-neighbor-connectivity` | `feat[next]`: `NeighborConnectivity[Domain, Codomain]`, `LocalDimensionIndex` (and `DimensionKind.LOCAL` removed: a local's `kind` is `None`, localness comes from `common.is_local_dimension`, and `order_dimensions` ranks horizontal/local/vertical explicitly), `check_neighbor_table`, `local_dimension_of`, declaration fingerprinting; usable in the DSL; shared local dimensions, in the declarations and in the backends (`connectivity_key_over`, DaCe `local_dimension_size`); `NeighborTableType` and `ts.ShiftType`; pyright in the typing nox session; ADR 0029 |
+| A: GridTools/gt4py#2899 | `connectivities-as-types-2-dimension-classes` | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0029); `codegen_name`; `CartesianAxisIndex` / `AnyCartesianAxisIndex` (both exported from `gtx`) and `Staggered[D: CartesianAxisIndex]`, with `__add__`/`__sub__` restricted to an axis statically and at runtime; interactive-`__main__` fallback; `NamedIndex` and the dimension half of the mypy plugin removed; `ConstList` with `size=1` replaces the `_CONST_DIM` aliases; `AxisLiteral` drops `kind`; printing IR never imports (`resolve_loaded`); offset tag = local dimension tag = provider key in the tree |
+| B: GridTools/gt4py#2907 | `connectivities-as-types-3-neighbor-connectivity` | `feat[next]`: `NeighborConnectivity[Domain, Codomain]`, `LocalDimensionIndex` (and `DimensionKind.LOCAL` removed: a local's `kind` is `None`, localness comes from `common.is_local_dimension`, and `order_dimensions` ranks horizontal/local/vertical explicitly), `check_neighbor_table`, `local_dimension_of`, declaration fingerprinting; usable in the DSL; shared local dimensions, in the declarations and in the backends (`connectivity_key_over`, DaCe `local_dimension_size`); `NeighborTableType` and `ts.ShiftType`; pyright in the typing nox session; ADR 0030 |
 | C: GridTools/gt4py#2910 | `connectivities-as-types-6-class-keyed-providers` | `feat[next]!`: the tree and docs declare connectivities as classes; class-keyed offset providers with `check_offset_provider` at every entry point; `FieldOffset` removed; `as_offset(dim, field)`; `table_types` replaces `offset_provider_type`; migration script |
 | D: GridTools/gt4py#2912 | `connectivities-as-types-8-typed-positions` | `refactor[next]`: `MultiDimensionIndex` and typed embedded positions |
 
 The four PRs form GitHub stack GridTools/gt4py#2917. `NeighborTableType`,
-`TableTypes` and `ts.ShiftType` land in B, `table_types` in C; ADR 0028 and
-ADR 0029 are in A and B respectively.
+`TableTypes` and `ts.ShiftType` land in B, `table_types` in C; ADR 0029 and
+ADR 0030 are in A and B respectively.
 
 **ICON4Py migration.** `scripts/python/migrate_connectivities.py` (PR C)
 rewrites `Dimension(...)` and `FieldOffset(...)` declarations (connectivities

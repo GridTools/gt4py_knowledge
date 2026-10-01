@@ -42,7 +42,7 @@ status: draft
    to length 4.
 6. **Staggering is part of the dimension change.** The `_Staggered` name
    prefix needs the name→class lookup that type identity removes, so
-   `Staggered[D]` is a real class and part of ADR 0028 (PR A), together with
+   `Staggered[D]` is a real class and part of ADR 0029 (PR A), together with
    the [[personal/egparedes/connectivities-as-types/connectivities-as-types#cartesian-axis-dimensions|Cartesian axis dimensions]] its parameter is bounded on; see
    [[personal/egparedes/connectivities-as-types/connectivities-as-types#staggeredd|`Staggered[D]`]].
 
