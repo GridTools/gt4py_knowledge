@@ -237,10 +237,10 @@ Numbered as in the main note's *Open questions*.
    vs `+0` in that one function — the backends only ever see an integer offset
    along an axis — against three costs: `a(Staggered[I] + 1/2)` stops being
    readable without the declaration, the frontend and embedded shift test matrix
-   doubles, and Identity rule 4 bites, since dimensions fingerprint *by reference*
-   and flipping the keyword in place would not invalidate the ADR 0023 cache. That
-   last hole is pre-existing (`kind` has it too) and would argue for folding
-   declaration-time dimension attributes into the fingerprint. Not in this stack.
+   doubles, and the keyword would have to be folded into the dimension fingerprint.
+   That last cost is now a known quantity rather than an open hole: Identity rule 4
+   fingerprints a dimension's `kind` alongside its by-reference name, so an
+   alignment keyword would follow the same pattern. Not in this stack.
 
 7. **A cell `degree` on the axis.** Making the degree assignment static
    (`degree=0|1`) would let a coboundary be typed generically

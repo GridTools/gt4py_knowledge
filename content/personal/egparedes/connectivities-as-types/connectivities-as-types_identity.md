@@ -19,7 +19,9 @@ status: draft
    class. Only where the module path ends is memoized: the attribute walk is
    repeated, so a declaration redefined under the same name (a re-run
    notebook cell) resolves to the new class. `AxisLiteral` stores only the tag
-   and derives `kind` and `dim` from it (the `TODO` at `iterator/ir.py:93`);
+   and derives `kind` and `dim` from it as read-only properties (the `TODO` at
+   `iterator/ir.py:93`); the derived `kind` is optional, since a local
+   dimension's is `None`;
    printing IR never imports (`resolve_loaded`). `Staggered[D]` tags use the
    small grammar `<owner tag>[<base tag>]`, resolved by subscripting the owner.
 

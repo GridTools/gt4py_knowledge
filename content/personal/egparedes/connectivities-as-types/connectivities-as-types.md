@@ -372,7 +372,8 @@ stated as rules:
    longest importable module prefix and walks the rest as attributes, the way
    `pickle` references a class, so a nested `V2E.Local` resolves naturally and a
    redefined declaration resolves to the new class. `AxisLiteral` stores only the
-   tag. Memoization, `resolve_loaded` and the `Staggered[D]` grammar: [[personal/egparedes/connectivities-as-types/connectivities-as-types_identity|the identity appendix]].
+   tag; its `kind` and `dim` are read-only properties off the resolved class, and
+   `kind` is optional because a local dimension's is `None`. Memoization, `resolve_loaded` and the `Staggered[D]` grammar: [[personal/egparedes/connectivities-as-types/connectivities-as-types_identity|the identity appendix]].
 2. **Types reaching the IR must be importable.** `<locals>` in a qualname is
    rejected at class creation (for dimensions and connectivities); pickle's
    own `save_global` stays the authoritative check. Interactive `__main__`
@@ -382,13 +383,16 @@ stated as rules:
    **compiles it in the calling thread** instead of failing in a spawn worker.
 3. **No registry.** Classes pickle by reference. The one narrow `copyreg` hook is
    for `Staggered[D]`, whose bracketed qualname `save_global` cannot look up.
-4. **Fingerprints depend on qualified names.** A dimension is fingerprinted by
-   reference, so redefining one under the same name with a different `kind` or
-   `base` does *not* invalidate artifacts — a real hole, and the reason the
-   alignment follow-up (open question 5) cannot be a declaration-time attribute
-   without also folding such attributes into the fingerprint. A connectivity declaration is
-   fingerprinted *additionally* by its domain, codomain, `Local` and counts, so
-   redefining one does. Either way the ADR 0023 cache invalidates on module renames.
+4. **Fingerprints depend on qualified names, plus `kind`.** A dimension is
+   deconstructed as its by-reference name *and* its `kind`, so redefining one under
+   the same name with another kind does invalidate artifacts; a staggered dimension
+   is fingerprinted through its base. `base` cannot be flipped in place at all —
+   `Staggered[K]` is interned by base identity and its tag embeds the base tag, so a
+   different base is a different class. The axis level
+   (`CartesianAxisIndex` versus `DimensionIndex`) is deliberately *not*
+   fingerprinted: it changes what is accepted, never what is emitted. A connectivity
+   declaration is fingerprinted *additionally* by its domain, codomain, `Local` and
+   counts. Either way the ADR 0023 cache invalidates on module renames.
 5. **Codegen names need injective mangling.** `codegen_name(tag)` is a prefix
    escape (`_`→`_u`, `.`→`_d`, `[`→`_l`, `]`→`_r`); the obvious alternative is
    not injective.
@@ -806,7 +810,9 @@ equality with an interning registry; and static-only `max_neighbors` /
    remove the one cosmetic cost of choosing which member of a pair to declare. It
    has to be static — it changes the integer correction
    `connectivity_for_cartesian_shift` bakes in, hence the emitted stencil — and it
-   hits the rule-4 fingerprint hole. See [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]].
+   would have to join `kind` in the dimension fingerprint, which rule 4 now
+   establishes as a pattern rather than an obstacle. See
+   [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]].
    Not in this stack.
 6. **`kind`'s remaining two jobs.** Once `LOCAL` leaves the enum, `kind` is a
    layout sort key and a name for the scan axis — properties of the field and of
