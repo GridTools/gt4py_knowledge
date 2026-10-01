@@ -101,28 +101,14 @@ path and the operation:
 | compiled | reduction | N3 `ListType.offset_type.value` | `iterator/transforms/unroll_reduce.py:47` |
 | compiled | sparse field *argument* | N3 `dim.value` | `codegens/gtfn/gtfn_module.py:95`; `dace/lowering/gtir_to_sdfg.py:581` |
 
-Two of these were confirmed by execution against v1.2.2:
-
-```text
-# MyOff = FieldOffset("TAGNAME", ...)              -- tag != variable name
-embedded:  offset_provider={"TAGNAME": conn} -> OK ; {"MyOff": conn}   -> KeyError 'TAGNAME'
-roundtrip: offset_provider={"MyOff": conn}   -> OK ; {"TAGNAME": conn} -> KeyError 'MyOff'
-
-# Off = FieldOffset("Off", source=E, target=(V, Neigh))   -- tag != local dim name
-neighbor_sum(a(Off), axis=Neigh), offset_provider={"Off": conn}
-embedded:  KeyError: "Offset 'Neigh' not found in offset provider."
-```
-
-The first shows embedded and compiled execution key the *same* program on
-*different* strings. The second shows that GridTools/gt4py#1789 ("gtfn with
-offset name != local dimension name"), which lifted the N1 = N3 requirement,
-only did so for the *shift* path under gtfn; its regression test
-(`tests/next_tests/regression_tests/ffront_tests/test_offset_dimensions_names.py`)
-covers exactly `a(Off[1])` on `GTFN_CPU` and nothing else. The embedded
-reduction still requires it (run); the roundtrip backend *passes* the same
-program, and the compiled gtfn pipeline is expected to fail through
-`unroll_reduce.py:47` — established by reading, not run. Sparse field
-arguments require it in both gtfn and DaCe (by reading).
+Two of these were confirmed by execution against v1.2.2: embedded and compiled
+execution key the *same* program on *different* strings, and a reduction whose
+offset tag differs from its local-dimension name raises
+`KeyError: "Offset 'Neigh' not found in offset provider."` in embedded while the
+roundtrip backend passes it. GridTools/gt4py#1789 lifted the tag = local-dimension
+requirement only for the *shift* path under gtfn. The transcripts, the
+regression-test coverage and what was read rather than run are in
+[[personal/egparedes/connectivities-as-types/connectivities-as-types_research|the constraints appendix]] §7.
 
 ### The declaration duplicates the type
 
@@ -216,8 +202,33 @@ and slimmed so that each owns only what the others cannot know:
 | `Connectivity` | the runtime protocol: a `Field` of integer indices with a `codomain`, which `field(conn)` / `Field.premap` dispatch on | unchanged. It unifies neighbor tables, Cartesian shifts and `as_offset` index fields, so embedded execution has one remap entry point. Essential. |
 | `CartesianConnectivity` | the `Connectivity` behind `I + 1` and `I + 0.5`; carries the ADR 0026 index arithmetic | unchanged. The Cartesian counterpart of a bound table: it needs no declaration and no provider. Essential. |
 | `NeighborTable` / `NdArrayConnectivityField` | the data: a 2-D table over `(Domain, Local)` with values in `Codomain` | unchanged; `check_neighbor_table` checks it against the declaration. Essential. |
-| `NeighborTableType` (was `NeighborConnectivityType`) | the type of a table *bound to a declaration*: `connectivity` (the declaration), `dtype`, `skip_value`, `max_neighbors`; `domain` and `codomain` are derived from the declaration. Built where a table is bound (`check_neighbor_table` returns it; `offset_provider_to_type`) or given directly for ahead-of-time compilation (`table_types`), never authored next to the declaration. A table alone cannot name its declaration — a sharer's table has the owner's domain dims and a different codomain — so the record is built from the provider key: a local dimension records its `owner` and its `sharers`, and the record takes whichever of them the key names. `NeighborTable.__gt_type__()` returns the structural base `ConnectivityType`. A table bound under a name no declaration answers to (hand-written IR) has no declaration: its `connectivity` is then that structural type | what compilation consumes instead of data (ADR 0019), what `compile(table_types=...)` takes when no table exists yet, and what fingerprints a compiled variant (the owner's and a sharer's record over one table fingerprint differently). It owns exactly the facts a declaration may leave open: element dtype, skip-value sentinel and width. Essential; the name says what it types. The base `ConnectivityType` (structural `domain`, `codomain`, `dtype`, `skip_value`) keeps its name and types general connectivity values such as the index field of `as_offset`. |
-| `ts.ShiftType` (was `ts.OffsetType`) | the frontend type of a shift *argument* in DSL code — what `V2E`, `V2E[1]`, `I + 1`, `K + 0.5` and `as_offset(K, f)` type as during FOAST type deduction, and what the lowering reads to emit `OffsetLiteral` / `CartesianOffset`. A `ts.TypeSpec` like `FieldType`, not a description of a connectivity | produced by `V2E.__gt_type__()`; fields `domain` (a tuple: one dimension for Cartesian shifts and `V2E[i]`, two for `V2E`), `codomain` and `tag` (`None` for untagged Cartesian shifts), printed as `Shift[tag: E -> (V, V2E.Local)]`. It carries no counts, dtype or skip value because the frontend never needs them, and it is gone after `foast_to_gtir` reads its `tag`. The literal name `ts.ConnectivityType` is avoided because `common.ConnectivityType` exists; "shift" is the word the note, the frontend errors and users use for `a(V2E)`. The iterator-level `it_ts.OffsetLiteralType` / `it_ts.CartesianOffsetType` keep their names: they type IR literals. |
+| `NeighborTableType` (was `NeighborConnectivityType`) | the type of a table *bound to a declaration* | renamed and slimmed; see below |
+| `ts.ShiftType` (was `ts.OffsetType`) | the frontend type of a shift *argument* in DSL code | renamed and re-fielded; see below |
+
+`NeighborTableType` holds exactly the facts a declaration may leave open: element
+`dtype`, the skip-value sentinel and `max_neighbors`; `domain` and `codomain` are
+derived from the declaration. It is built where a table is bound
+(`check_neighbor_table`, `offset_provider_to_type`) or given directly for
+ahead-of-time compilation (`table_types`), never authored next to the declaration.
+A table alone cannot name its declaration — a sharer's table has the owner's domain
+dims and a different codomain — so the record is built from the provider key,
+taking whichever of the local dimension's `owner` or `sharers` the key names. A
+table bound under a name no declaration answers to (hand-written IR) gets the
+structural base `ConnectivityType`, which is also what `NeighborTable.__gt_type__()`
+returns and what types general connectivity values such as the index field of
+`as_offset`. It is what fingerprints a compiled variant: the owner's and a sharer's
+record over one table fingerprint differently.
+
+`ts.ShiftType` is what `V2E`, `V2E[1]`, `I + 1`, `K + 0.5` and `as_offset(K, f)`
+type as during FOAST deduction, and what the lowering reads to emit `OffsetLiteral`
+/ `CartesianOffset`. Fields: `domain` (a tuple — one dimension for Cartesian shifts
+and `V2E[i]`, two for `V2E`), `codomain`, and `tag` (`None` for untagged Cartesian
+shifts), printed as `Shift[tag: E -> (V, V2E.Local)]`. It carries no counts, dtype
+or skip value because the frontend never needs them, and it is gone once
+`foast_to_gtir` has read its `tag`. The name avoids `ts.ConnectivityType`, which
+`common` already uses; "shift" is the word this note, the frontend errors and users
+use for `a(V2E)`. The iterator-level `it_ts.OffsetLiteralType` /
+`it_ts.CartesianOffsetType` keep their names: they type IR literals.
 
 ### Sketch
 
@@ -354,14 +365,10 @@ dimensions in `tests/next_tests` move to module level. The consequences,
 stated as rules:
 
 1. **Reconstruction from the IR is an import.** `resolve(tag)` imports the
-   longest importable module prefix and walks the rest as attributes (nested
-   classes like `V2E.Local` resolve naturally), the way `pickle` references a
-   class. Only where the module path ends is memoized: the attribute walk is
-   repeated, so a declaration redefined under the same name (a re-run
-   notebook cell) resolves to the new class. `AxisLiteral` stores only the tag
-   and derives `kind` and `dim` from it (the `TODO` at `iterator/ir.py:93`);
-   printing IR never imports (`resolve_loaded`). `Staggered[D]` tags use the
-   small grammar `<owner tag>[<base tag>]`, resolved by subscripting the owner.
+   longest importable module prefix and walks the rest as attributes, the way
+   `pickle` references a class, so a nested `V2E.Local` resolves naturally and a
+   redefined declaration resolves to the new class. `AxisLiteral` stores only the
+   tag. Memoization, `resolve_loaded` and the `Staggered[D]` grammar: [[personal/egparedes/connectivities-as-types/connectivities-as-types_identity|the identity appendix]].
 2. **Types reaching the IR must be importable.** `<locals>` in a qualname is
    rejected at class creation (for dimensions and connectivities); pickle's
    own `save_global` stays the authoritative check. Interactive `__main__`
@@ -369,26 +376,21 @@ stated as rules:
    dimensions there — so the process-pool runner (`BUILD_JOBS_MODE=process`)
    detects a job that references such a class and, with a warning,
    **compiles it in the calling thread** instead of failing in a spawn worker.
-3. **No registry.** Classes pickle by reference. One narrow `copyreg` hook
-   exists, for `Staggered[D]`, whose bracketed qualname `save_global` cannot
-   look up; it reduces to the base dimension and re-interns.
-4. **Fingerprints depend on qualified names.** Dimensions are fingerprinted by
-   reference (`Staggered[D]` through its base); a connectivity declaration
-   additionally by its domain, codomain, `Local` and counts, so a redefinition
-   under the same name does not reuse artifacts. Consequently the ADR 0023
-   build cache invalidates on module renames.
+3. **No registry.** Classes pickle by reference. The one narrow `copyreg` hook is
+   for `Staggered[D]`, whose bracketed qualname `save_global` cannot look up.
+4. **Fingerprints depend on qualified names**, so a redefinition under the same
+   name does not reuse artifacts and the ADR 0023 build cache invalidates on
+   module renames.
 5. **Codegen names need injective mangling.** `codegen_name(tag)` is a prefix
-   escape — `_`→`_u`, `.`→`_d`, `[`→`_l`, `]`→`_r` — used by gtfn, DaCe, the
-   roundtrip backend and the nanobind bindings; its inverse
-   `from_codegen_name` is used by DaCe to parse names back. The simpler
-   "escape `__`, then replace `.`" is **not** injective (`".."` and `"_"`
-   collide); the prefix escape is tested exhaustively over its alphabet up
-   to length 4.
-6. **Staggering is part of the dimension change.** The `_Staggered` name
-   prefix needs the name→class lookup that type identity removes, so
-   `Staggered[D]` is a real class and part of ADR 0028 (PR A), together with
-   the [Cartesian axis dimensions](#cartesian-axis-dimensions) its parameter is bounded on; see
-   [`Staggered[D]`](#staggeredd).
+   escape (`_`→`_u`, `.`→`_d`, `[`→`_l`, `]`→`_r`); the obvious alternative is
+   not injective.
+6. **Staggering is part of the dimension change.** The `_Staggered` name prefix
+   needs the name→class lookup that type identity removes, so `Staggered[D]` is a
+   real class and part of ADR 0028 (PR A), with its parameter bounded on a
+   declared [Cartesian axis](#cartesian-axis-dimensions).
+
+   Rules 3–6 in full — the hook, the fingerprint deconstructors, the exhaustive
+   mangling test and the `_Staggered` history — are in [[personal/egparedes/connectivities-as-types/connectivities-as-types_identity|the identity appendix]].
 7. **The IR names a connectivity by its `offset_tag`.** That is its local
    dimension's tag when it declares the local dimension: shifts, reductions
    and sparse arguments then all find the table under **one** string, so the
@@ -405,107 +407,26 @@ stated as rules:
 ### Cartesian axis dimensions
 
 A **Cartesian axis** is an index space with integer index arithmetic and
-exactly one staggered partner — the dimensions `CartesianConnectivity` acts on.
-Read one axis of a Cartesian grid as a
-1-dimensional CW complex — a path when the axis is bounded, a cycle when it is
-periodic. Such a complex has exactly two cell classes, of degree 0 and 1, and a
-declared axis together with its `Staggered[·]` name those two classes.
-`Staggered` is the **involution that swaps them**. The types do not say which
-class has degree 0, and they need not: the ADR 0026 position convention
-(`Staggered[X](i)` at `i - 1/2`) fixes only their *relative* alignment. Both
-assignments occur. A vertex-indexed structured grid declares the 0-cells, so
-`Staggered[I](i)` is the 1-cell `[I(i-1), I(i)]`; ICON's Lorenz grid declares
-the 1-cells, `KDim` being the full levels (layer midpoints) while
-`Staggered[KDim]` are the half levels (interfaces, the 0-cells).
+exactly one staggered partner — the dimensions `CartesianConnectivity` acts
+on. One axis of a Cartesian grid is a 1-dimensional CW complex and has exactly
+two cell classes; a declared axis and its `Staggered[·]` name those two, and
+`Staggered` is the involution that swaps them. The types do not fix which class
+has degree 0. In more than one dimension the grid is the product complex of its
+axes, so a cell class is one bit per axis and `Dims[...]` *is* that bit vector —
+finer than a form degree, and the reason mesh locations are separate classes
+instead: a per-axis bit exists exactly when the complex factors as a product.
 
-In more than one dimension the grid is the **product** complex of its axes, so
-a cell class is a bit vector over axes — one bit per axis, "does this cell span
-it?" — and the cell degree is the number of set bits. `Dims[...]` *is* that bit
-vector:
+Two facts shape the hierarchy. A staggered dimension **is itself** a Cartesian
+axis — the other cell class of the same complex — so the asymmetry between `D`
+and `Staggered[D]` is *declarational*, not semantic: one is written by the user,
+the other derived, and there is exactly one partner to derive. And `Staggered[D]`
+needs no orientation data, because a product of intervals is canonically
+oriented per axis.
 
-| `Dims[...]` | cell | degree |
-| --- | --- | --- |
-| `Dims[I, J]` | vertex | 0 |
-| `Dims[Staggered[I], J]` | edge along `I` | 1 |
-| `Dims[I, Staggered[J]]` | edge along `J` | 1 |
-| `Dims[Staggered[I], Staggered[J]]` | face | 2 |
-
-The `cell` and `degree` columns assume the first assignment above — every
-declared axis indexes its 0-cells. Under the other assignment the column reads
-upside down on that axis; the *encoding* is unaffected, which is the point.
-
-Per-axis staggering is therefore *more* informative than a form degree, which
-in two dimensions conflates the two edge families a C-grid must keep apart —
-the distinction that has to be recovered by hand, as a component label, wherever
-no product structure exists (`EDGE_N` vs `EDGE_T` in
-[[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]
-§7.1). It is also why the structured and unstructured cases are encoded
-differently here at all: a per-axis bit exists exactly when the complex factors
-as a product, and mesh locations (`V`, `E`, `C`) are separate dimension classes
-because it does not.
-
-Two consequences shape the hierarchy:
-
-- **A staggered dimension is itself a discretized axis.** It is the other cell
-  class of the same complex: it carries fields, has a range, and takes integer
-  offsets. So the asymmetry between `D` and `Staggered[D]` is not semantic but
-  *declarational* — one is written by the user, the other derived from it, and
-  there is exactly one partner to derive. That is what makes the derivation
-  well-founded, and it is the level `Staggered`'s parameter must name.
-- **`Staggered[D]` needs no orientation data.** A 1-cell in a complex is
-  oriented, which is what makes the coboundary signed. A product of intervals
-  has a canonical orientation per axis (increasing index), so the sign is
-  implicit in the stencil the user writes. The unstructured side has no such
-  canonical choice, which is why incidence signs are materialized there (ICON's
-  `geofac_div` carries them). The absence is a consequence of the product
-  structure, not an omission.
-
-**The alignment is antisymmetric, so the convention is the user's to pick.** The
-ADR 0026 convention places `Staggered[D](i)` at `i - 1/2` in `D`'s coordinates;
-equivalently, it places `D(j)` at `j + 1/2` in `Staggered[D]`'s. Both conventions
-appear in production codes — the SGRID convention's four `padding` values
-enumerate both, `low` and `both` placing a cell at `j - 1/2` while `none` and
-`high` place it at `j + 1/2`
-([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
-§3) — and either is reachable by choosing *which member of the pair to
-declare*. The default puts the partner half a cell *below*; to have it half a cell
-*above* your main field, declare the axis the **partner** lives on and alias your
-main field onto the derived member. With `class IFace(CartesianAxisIndex)` and
-`ICell: TypeAlias = Staggered[IFace]`, an `IFace` field sits half a cell above the
-`ICell` field of the same index. The pair is symmetric in the implementation —
-`order_dimensions` orders by the base either way, `check_dims` is symmetric,
-fingerprints go through the base, gtfn aliases the staggered tag to its base — so
-the only residual cost is cosmetic: the derived member's *tag* reads
-`...Staggered[IFace]` in the IR, in codegen names and in error messages. Stencil
-code built from relative shifts is convention-independent in any case
-(`p(S + 1/2) - p(S - 1/2)` is the same difference either way, and `±1/2` reaches
-both neighbours); the convention bites only on absolute index correspondence with
-a reference implementation and on boundary index ranges.
-
-**Extents are declared, never derived.** A path complex has `n` 0-cells and
-`n - 1` 1-cells; a cycle has `n` and `n`. So the two members of a pair do not in
-general have the same range, and *which one is wider is the degree assignment*:
-with `I` the 0-cells on `[0, n)`, the interior 1-cells are `[I(i-1), I(i)]` for
-`i` in `[1, n)`, and `Staggered[I](0)` is the first cell outside the complex —
-exactly where a halo cell goes; with `K` the 1-cells on `[0, n)` (ICON's layers),
-the interfaces run `[0, n+1)`. Both are expressible without any new type-level
-concept because a `Domain` holds absolute `UnitRange(start, stop)`s rather than
-sizes — see
-[[personal/havogt/field-data-protocol/field-data-protocol|the field data protocol]]
-for why absolute addressing is the right domain model — and the periodic case
-needs nothing extra, the two ranges simply coincide in size. The invariant a grid
-builder owes is that the two ranges *interleave*; their sizes then differ by at
-most one when the complex is closed, and halo extension relaxes even that (two of
-SGRID's four bounded cases, `low` and `high`, have equal sizes). An absolute range
-is strictly more expressive than SGRID's `padding` enum here: each of its four
-values is one `UnitRange` under a single alignment convention, and
-`padding: low` is exactly the halo cell named above. No component of this design
-sees both ranges at once, so enforcing it belongs to whatever
-constructs both
-([[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos|a mesh
-concept with first-class halos]]). Note also that `order_dimensions` giving a
-staggered field the *layout order* of its base says nothing about its *shape*:
-the two are independent.
+That derivation, the alignment convention and its antisymmetry, why extents are
+declared rather than derived, and the per-declaration axis-versus-mesh-location
+decision are in [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]]; its external
+corroboration is in [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|the conventions appendix]].
 
 Hence three levels, all *below* `DimensionIndex`, so that no
 `type[DimensionIndex]` annotation in the tree changes and `LocalDimensionIndex`
@@ -530,16 +451,9 @@ Four checks the tree performs at runtime, or not at all, become static:
 | `Staggered[C]` — no half-cells on an unstructured mesh | nothing rejects it | static, at the bound |
 | `C + 1`, `V2E.Local + 1` — index arithmetic off an axis | runtime `kind` check, or a late failure | static, via `DimensionMeta.__add__`'s self-type |
 
-The last row needs `__add__` declared with `cls: type[AnyCartesianAxisIndex]`.
-Both checkers bind that signature correctly at every call site and both reject it
-at the *definition* site, with different diagnostics — mypy `[misc]` ("self"
-parameter missing for a non-static method), pyright
-`reportGeneralTypeIssues` ("Type of parameter `cls` must be a supertype of its
-class `DimensionMeta`") — so it costs two separately-spelled suppressions. P4 of
-[`staggered_probe.py`](staggered_probe.py) pins this down; the same restriction
-is what
-[[personal/havogt/dimension-generic-fields/dimension-generic-fields|generic dimensions]]
-suppresses for its overload pairs.
+The last row costs two definition-site suppressions, one per checker. P4 of
+[`staggered_probe.py`](staggered_probe.py) pins it down and
+[[personal/egparedes/connectivities-as-types/connectivities-as-types_typing|the typing appendix]] records both diagnostics.
 
 `kind` **shrinks.** It carries four jobs today: `LOCAL` marks a neighbor axis;
 `order_dimensions` sorts by `(kind, as_non_staggered(dim).value)`, so it decides
@@ -553,12 +467,6 @@ enum**: `kind` becomes `HORIZONTAL | VERTICAL` and `order_dimensions` sorts by
 role, which belong to the field and to the program respectively — see
 [Open questions](#open-questions--follow-ups).
 
-The class level also draws a distinction `kind` never did: `IDim` and `CellDim`
-are both `HORIZONTAL` and only the first is an axis. That is why the migration
-cannot be inferred from the source — whether a dimension is an axis or a mesh
-location is a decision per declaration (about ten in ICON4Py's `dimension.py`;
-near-uniformly `CartesianAxisIndex` in `tests/next_tests`). The migration script
-rewrites what it can and reports the rest.
 
 ### `Staggered[D]`
 
@@ -609,13 +517,10 @@ of [Cartesian axis dimensions](#cartesian-axis-dimensions).
   `K + 0.5` is a plain `Connectivity`. `check_dims` rejects a dimension and
   its staggered counterpart in one field or domain, and `order_dimensions`
   orders by the base, so a staggered field has the layout of its base.
-- **IR and serialization.** The tag is
+- **IR, serialization and fingerprints.** The tag is
   `gt4py.next.common.Staggered[<base tag>]` — the one tag that is not a
-  qualified name. `resolve` parses the `<owner>[<base>]` grammar and
-  subscripts the owner, the IR pretty-parser accepts it, and `codegen_name`
-  escapes the brackets. `pickle` cannot look up a bracketed qualname, so one
-  `copyreg` hook reduces a staggered class to its base and re-subscripts on
-  load; fingerprints are likewise taken through the base.
+  qualified name. Its grammar, the `copyreg` hook and fingerprinting through
+  the base are in [[personal/egparedes/connectivities-as-types/connectivities-as-types_identity|the identity appendix]].
 - **Backends.** gtfn emits the staggered tag as a C++ alias of its base tag
   (`_add_staggered_aliases`), since its shift primitive can offset along an
   axis but not rename it. DaCe names map variables by the base
@@ -623,23 +528,9 @@ of [Cartesian axis dimensions](#cartesian-axis-dimensions).
   iteration space for a field and its staggered counterpart.
 
 [[personal/havogt/dimension-generic-fields/dimension-generic-fields|Generic dimensions and statically typed staggering]]
-Part II proposed this `Staggered[D]` shape with the same shift convention, and
-the root/user split that makes the doubly staggered type unrepresentable; here
-that split is motivated as the axis concept above and placed below
-`DimensionIndex` so that no annotation widens. Its static involution overloads
-(typing `Staggered[K] + 0.5` as landing on `K` for the checkers) are not part
-of the stack, so statically a half-integer shift is a plain `Connectivity`. Its
-`gradient_to_staggered` example, `p(Staggered[I] + 1/2) - p(Staggered[I] - 1/2)`,
-is the coboundary of a 0-cochain, which is why it lands on the partner class.
-
-**One naming constraint.** That prototype spells the partner-swapping operation
-`dual()` / `Dual[X]`. In a complex the Hodge dual flips *every* axis bit (a
-primal k-cell pairs with a dual (n−k)-cell) while `Staggered[D]` flips one, so
-the two coincide only in one dimension. `dual` stays reserved for the full
-Hodge dual — the sense
-[[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]
-§6.5 uses for the primal/dual C↔D grid swap — and the per-axis operation keeps
-gt4py's existing name, `flip_staggered`.
+Part II proposed this `Staggered[D]` shape and the root/user split that makes the
+doubly staggered type unrepresentable. What differs here, and the constraint
+reserving `dual` for the full Hodge dual, are in [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]].
 
 ### Binding model
 
@@ -733,52 +624,10 @@ tables assign different neighbors to the same domain element. The model:
   (`NeighborConnectivity[V, "V2E.Local", E]`): mypy accepts that string
   forward reference, pyright reports `Class definition for "V2E" depends on
   itself`. `__init_subclass__` reads it from the class body instead.
-- **`Local` is annotated nowhere**, and that is load-bearing. An annotation on
-  the base (`Local: ClassVar[type[LocalDimensionIndex]]`) or on the metaclass
-  makes a declaration's `Local` a *variable* for the checkers, so
-  `Field[Dims[V, V2E.Local], float]` is rejected — by pyright for a nested
-  `Local` ("Variable not allowed in type expression"), by mypy for an adopted
-  or shared one ("not valid as a type"). A real nested `Local` on the base is
-  not an option either: pyright reports an incompatible override in every
-  declaration. With no annotation anywhere, all three spellings are types for
-  both checkers.
-  The cost is that `conn.Local` is not an attribute the checkers know for a
-  *generic* `conn`: library code reads it through
-  `common.local_dimension_of(conn)`, and code that must name a local dimension
-  generically uses a `TypeVar` bound to `LocalDimensionIndex`. This is checked
-  for both checkers in CI: the mypy cases in `typing_tests/test_next.yaml`, and
-  a pyright run over `typing_tests/pyright_probes.py` in the same nox session
-  (pyright is what catches the annotation regression; mypy accepts it).
-- A declaration can instead **adopt** a module-level local dimension, written
-  `Local: typing.TypeAlias = V2EDim`; the local keeps its own tag, which is then
-  the connectivity's `offset_tag`. This is also how the migration script
-  rewrites existing `FieldOffset`s without renaming anything. Adopting is *not*
-  side-effect free: the adopter becomes the local's `owner` and writes its
-  counts onto the module-level class, and ownership is first-come — the first
-  connectivity declared over a local dimension owns it, later ones share it and
-  are recorded in its `sharers`. A
-  declaration *redefined* under the same tag (a re-run notebook cell) takes
-  ownership over again rather than becoming a sharer, and the counts it repeats
-  are then checked against the local dimension's own `size=`, not against what
-  the stale owner wrote. `ConstList` cannot be adopted: it belongs to no
-  connectivity.
-- A connectivity can **share** another one's local dimension
-  (`class C2CE(NeighborConnectivity[C, CE]): Local: typing.TypeAlias =
-  C2E.Local`). ICON4Py's flattened sparse offsets (`C2CE`, `E2ECV`, `E2EC`,
-  `C2CEC`) need exactly this, because their results must combine with
-  `C2E`-shaped sparse fields. The
-  owner stays the first declaration over the local (here `C2E`); the sharer
-  must have the same domain (its codomain is free), any counts it repeats must
-  equal the owner's, and reductions over the shared axis take the neighbor
-  structure from any bound table over it (`connectivity_key_over`: the owner's
-  key if bound, else the smallest bound key over that local, which raises
-  `KeyError` if there is none).
-- **Write an adopted or shared `Local` as a `TypeAlias`.** `Local: TypeAlias =
-  C2E.Local` is what keeps mypy treating `C2CE.Local` as a type; with a plain
-  assignment it is "not valid as a type" there (pyright accepts either, but
-  widens the plain form to `LocalDimensionIndex`). With the alias, annotations
-  may name the local dimension through any of its spellings — `C2CE.Local`,
-  `C2E.Local`, `V2EDim` — and they are one type.
+- **`Local` is annotated nowhere**, and an adopted or shared `Local` must be a
+  `TypeAlias`. Both are forced by what mypy and pyright accept in an annotation
+  position; [[personal/egparedes/connectivities-as-types/connectivities-as-types_typing|the typing appendix]] has the diagnostics, and
+  [`typing_probe.py`](typing_probe.py) the probes.
 - `max_neighbors` / `min_neighbors` are class keywords, like `kind` on a
   dimension, and optional (see Binding model). They are *not* type
   parameters: Python has no integer-valued type parameters, and nothing
@@ -868,124 +717,15 @@ The Cartesian `FieldOffset` goes together with the unstructured one:
 Cartesian shifts were already `Dim + i`, and `as_offset` takes the
 dimension, `as_offset(KDim, field)`.
 
-### Relation to `Local[V2E]`
-
-[[personal/havogt/dependent-local-dimensions/dependent-local-dimensions|Dependent local dimensions]]
-spells the local dimension `Local[V2E]` (a generic parametrized by the
-connectivity); this proposal spells it `V2E.Local` (a class nested in the
-connectivity). They **cannot be reconciled for a type checker**: making
-`Local.__class_getitem__` return `V2E.Local` unifies them at runtime only.
-[`typing_probe.py`](typing_probe.py) shows both mypy
-and pyright treating `Field[V, V2E.Local]` and `Field[V, Local[V2E]]` as
-incompatible in both directions. One spelling has to win, and this proposal
-picks `V2E.Local`: the nested form is what makes the tag unique with no
-registry, and the counts belong to the owner. The cost is honest and falls
-on the chain proposals: their mypy-verified encodings
-(`static_hops.py`: `Local[NeighborTable[O, C]]`, `Local[ConnT]`) are built
-on subscripting `Local`, and a `TypeVar` cannot be subscripted for a nested
-attribute (`Local[ConnT]` fails at runtime with `'TypeVar' object has no
-attribute 'Local'`). Those encodings need rewriting to `C.Local`, which
-works for concrete `C` and needs a protocol or overloads for the generic
-hop-stack case. The semantics of the chain proposals are unaffected; their
-static encoding is.
 
 ## Alternatives considered
 
-**Keep every concept; fix only which string wins.** Emit `FieldOffset.value`
-instead of `foast.Name.id` in `foast_to_gtir`, validate `value == target[-1].value`
-eagerly, extend the #1789 regression test. Two PRs, low risk — and the
-`foast_to_gtir` part is a real bug, fixed regardless, in GridTools/gt4py#2898.
-But it *enforces* the tangle rather than removing it; no concept goes away.
-
-**A declaration object with a derived local dimension, keeping `Dimension`
-instances.** Same shape as this proposal minus static typing and minus type
-identity: `local_dim.value == name` by construction, provider keyed by the
-declaration object. Superseded by building on dimensions as types instead:
-once dimensions are classes, the nested-class form is both simpler and
-statically meaningful.
-
-**`(name, kind)` value equality with an interning registry** (the design of
-[[shared/dimensions-as-types|dimensions as types]] and GridTools/gt4py#2844).
-Keeps independently declared same-named dimensions interchangeable and
-avoids the importability rule. Rejected because it decouples the Python
-type's identity from the IR's, needs a registry plus `copyreg` plus a custom
-fingerprint deconstructor to paper over that gap, and cannot give a nested
-`V2E.Local` a unique name without further convention. See *Identity*.
-
-**Integer type parameters for `max_neighbors`** (`LocalDimensionIndex[F: int, M: int]`).
-Would need `Literal[6]` type arguments and `Final[F]` over a `TypeVar`;
-checkers gain nothing. Class keywords instead.
-
-**Data on the class** (`data: ConnectivityField | Unbound`). Process-global
-mutable state; tests bind several meshes per process, and the compile cache
-assumes the table travels separately from the type. Binding per call, keyed by
-the class, keeps the invariant structural.
-
-**`axis=V2E` as sugar.** Rejected for now; keep the local axis explicit.
-
-**Static-only `max_neighbors` / `min_neighbors`.** Simplest, and correct for
-fixed-arity meshes. Rejected as the *only* mode because it binds DSL source
-to one mesh family (`fvm_nabla_setup.py` sizes `V2E` from the atlas mesh) and
-because skip-value presence is configuration-dependent in ICON, so a static
-`min_neighbors` forces either duplicate classes or always-on skip handling.
-Declared counts stay available as a constraint; see Binding model.
-
-**A generated `Local` as the default, explicit declaration optional.**
-Rejected after running the checkers: a `ClassVar`-typed generated `Local` is
-not usable in an annotation under mypy or pyright
-([`typing_probe.py`](typing_probe.py), probe P2).
-
-**`Local[C]` as the spelling, with `V2E.Local` an alias.** Rejected: the two
-are distinct types for every checker (probe P3); see Relation to `Local[V2E]`.
-
-**Owner-less local axes as non-LOCAL dimensions.** Rejected: they would
-become domain dimensions with a range in every program domain and lose the
-sparse storage treatment, changing ICON4Py's layout for `LsqUnkDim` fields.
-
-**A `PEP 695` generic for `Staggered[D]`.** Rejected: the subscription would
-be a `typing` alias, not a class, failing `issubclass` and eve's `type[...]`
-validation and unable to carry a tag. The metaclass subscription builds a
-real class; the PEP 695 form is used only under `TYPE_CHECKING`.
-
-**A sibling root above `DimensionIndex`** — `AnyDimensionIndex` with
-`DimensionIndex` and `Staggered[D]` as siblings, which is where
-[[personal/havogt/dimension-generic-fields/dimension-generic-fields|generic dimensions]]
-puts the split. Gives the same static ban, but `Staggered[K]` then stops being
-a `DimensionIndex`, so every annotation and `issubclass` guard that must accept
-a staggered dimension has to widen, and the static and runtime lattices diverge
-unless the widening is mirrored at runtime. The `AnyCartesianAxisIndex` / `CartesianAxisIndex`
-levels sit below the root instead and cost nothing at those sites.
-
-**A structural discriminator instead of the axis levels** — bound `Staggered`'s
-parameter to a `Protocol` carrying `__gt_staggered__: ClassVar[Literal[False]]`
-that the staggered class overrides with `Literal[True]`. Rejected: it needs a
-suppressed incompatible-override, reports an opaque diagnostic, hangs a
-meaningless attribute on every dimension, and buys only the ban — there is no
-axis concept, so `C + 1` and `Staggered[C]` stay unchecked.
-
-**A second partner constructor** — `Staggered[D]` for `i - 1/2` and
-`StaggeredAbove[D]` for `i + 1/2`, instead of a per-axis alignment. Rejected: it
-gives three cell classes per axis where an axis has two, so
-`Field[Dims[Staggered[I], StaggeredAbove[I]]]` — the same physical axis twice —
-becomes expressible and needs a new `check_dims` rule; and it makes
-`flip_staggered` partial, since `flip_staggered(I)` would have two candidate
-answers, so `I + 0.5` could not compute its own codomain and neither
-`as_non_staggered` nor the typed `dual()` would be well defined. It also spells a
-per-*pair* fact at every use site, so two modules can disagree about one grid, and
-it duplicates the whole bracketed-tag apparatus (a second interned family, tag
-grammar, `copyreg` hook and codegen escape). Parameterizing the alignment, if it
-is done at all, is one class keyword on the declared axis — see
-[Open questions](#open-questions--follow-ups).
-
-**Declaring both members of a pair** (`class ICell(CartesianAxisIndex, dual_of=IFace,
-offset=+0.5)`). The explicit form, rejected for the reason this note exists: it
-reintroduces a two-object agreement, loses the property that a partner needs no
-separate declaration, and loses the involution by construction.
-
-**`Staggered[D: AnyCartesianAxisIndex]`**, bounding on any cell class rather than on a
-declared axis. The semantically tempting reading, since a staggered dimension
-*is* an axis — but it re-admits `Staggered[Staggered[K]]`. The bound has to name
-the declared level.
+Eleven alternatives are recorded in [[personal/egparedes/connectivities-as-types/connectivities-as-types_alternatives|the alternatives appendix]],
+and the six concerning the axis levels and `Staggered[D]` in
+[[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]]. The three a reviewer is most likely
+to raise: keep every concept and fix only which string wins; `(name, kind)` value
+equality with an interning registry; and static-only `max_neighbors` /
+`min_neighbors`.
 
 ## Relation to gt4py ADRs
 
@@ -1022,65 +762,28 @@ the declared level.
    [[personal/havogt/closure-variable-resolution|Closure variable resolution]]
    would be its natural home.
 4. **Chain proposals.** Their static encodings need rewriting to `C.Local`
-   ([Relation to `Local[V2E]`](#relation-to-localv2e)).
-5. **Parameterizing the alignment.** The ADR 0026 convention is hard-coded, while
-   SGRID's `padding` attribute exists precisely because production codes use both
-   alignments
-   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
-   §3). The antisymmetry above makes both conventions reachable by choosing which member of
-   the pair to declare, at a cosmetic cost in the derived member's tag; a per-axis
-   class keyword (`class X(CartesianAxisIndex, stagger=Align.ABOVE)`) would remove
-   even that. It would have to be **static, on the axis**: it changes the integer
-   correction `connectivity_for_cartesian_shift` bakes into the
-   `CartesianConnectivity`, hence the emitted stencil, so unlike periodicity and
-   extents it cannot be a grid property. Its footprint is one `ClassVar` plus `+1`
-   vs `+0` in that one function — the backends only ever see an integer offset
-   along an axis — against three costs: `a(Staggered[I] + 1/2)` stops being
-   readable without the declaration, the frontend and embedded shift test matrix
-   doubles, and Identity rule 4 bites, since dimensions fingerprint *by reference*
-   and flipping the keyword in place would not invalidate the ADR 0023 cache. That
-   last hole is pre-existing (`kind` has it too) and would argue for folding
-   declaration-time dimension attributes into the fingerprint. Not in this stack.
+   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_typing#3-relation-to-localv2e|typing appendix]] §3).
+5. **Parameterizing the alignment.** A per-axis `stagger=` class keyword would
+   remove the one cosmetic cost of choosing which member of a pair to declare. It
+   has to be static — it changes the integer correction
+   `connectivity_for_cartesian_shift` bakes in, hence the emitted stencil — and it
+   hits the rule-4 fingerprint hole. See [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]].
+   Not in this stack.
 6. **`kind`'s remaining two jobs.** Once `LOCAL` leaves the enum, `kind` is a
-   layout sort key and a name for the scan axis. Layout is a property of the field,
-   not of the dimension, and that coupling is why dimension *names* currently
-   determine memory layout (F4); what `order_dimensions` actually wants is an
-   *order* — innermost to outermost, `I, J, K` for a box, `(CellDim, KDim)` for
-   ICON — which a per-grid dimension ordering would supply and which would retire
-   F4. "Vertical" is a role, not a geometry: in a Cartesian box the three axes are
-   alike, and what singles out `K` is that the numerics is sequential along it and
-   that it is not decomposed, properties of the program and of the decomposition.
-   [[personal/havogt/scan-redesign/scan-redesign|Scan redesign]] takes the scan
-   range from the output domain and never appeals to `kind` at all, and SGRID describes
-   vertical staggering with the *same* `padding` syntax as horizontal, so it needs
-   no vertical kind at all. Every candidate
-   *addition* to `kind` — periodic, distributed, sequential, cell degree — likewise
-   belongs to the grid, the program or the range, so `kind` should shrink rather
-   than grow.
-7. **A cell `degree` on the axis.** Making the degree assignment static
-   (`degree=0|1`) would let a coboundary be typed generically
-   (`d⁰: Field[deg 0] -> Field[deg 1]`) and make the range invariant derivable
-   rather than declared. Left out for now: it duplicates what the absolute ranges
-   already say, creating exactly the cross-object agreement this note removes; it
-   does not fix the extent relation without periodicity, which cannot be static;
-   and nothing consumes it until an exterior-calculus surface exists (Proposal 1
-   of
-   [[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]).
-   Revisit if that surface lands — but note that a degree is *canonical* for a mesh
-   location and only *declarational* for a Cartesian axis, so it belongs on the
-   `LocationIndex` of the next item rather than here
-   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
-   §4a).
-8. **A `LocationIndex` level for mesh locations.** `CartesianAxisIndex` separates
-   Cartesian axes from everything else, but `V`, `E`, `C` stay direct
-   `DimensionIndex` subclasses, so "a primary, non-local dimension" — what
-   `NeighborConnectivity[Domain, Codomain]` and `MultiDimensionIndex` actually
-   want, and check at runtime — is still not a type. A fourth level would give
-   it, at the cost of a second per-declaration migration decision. Out of scope
-   here, but it has a ready-made vocabulary: UGRID's `node`/`edge`/`face`/`volume`
-   gated by `topology_dimension`, whose location names *are* cell degrees
-   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
-   §4a).
+   layout sort key and a name for the scan axis — properties of the field and of
+   the program, not of the dimension. Every candidate *addition* belongs to the
+   grid, the program or the range, so `kind` should shrink rather than grow; see
+   [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]] §7.
+7. **A cell `degree` on the axis.** Left out: it duplicates what the absolute
+   ranges already say, needs periodicity (which cannot be static), and has no
+   consumer until an exterior-calculus surface exists. A degree is *canonical* for
+   a mesh location and only *declarational* for an axis, so it belongs on the
+   `LocationIndex` of the next item; see [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]]
+   and [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions]] §4a.
+8. **A `LocationIndex` level for mesh locations.** `V`, `E`, `C` stay direct
+   `DimensionIndex` subclasses, so "a primary, non-local dimension" is still not a
+   type. UGRID supplies the vocabulary and the degrees
+   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]] §4a). Out of scope here.
 9. **`DimensionMeta.__eq__` versus "equality is `is`".** [Identity](#identity-is-the-qualified-python-name)
    states that the runtime view of identity is `is`, while the sketch keeps
    `__eq__` overridden so that `I == 5` builds a `Domain` (with
@@ -1089,14 +792,10 @@ the declared level.
    call `bool(Domain)`. Class-keyed providers (`{V2E: table}`) and the `is`-based
    identity story both depend on this being benign; it is not established here,
    and the ADR 0028 implementation should say which of the two rules wins.
-10. **The index origin of a bound table.** `NeighborTableType` records `dtype`,
-   `skip_value` and `max_neighbors` but no index origin, while UGRID standardizes
-   `start_index` ∈ {0, 1} and ICON4Py's tables come from Fortran. Since a codomain
-   dimension carries an absolute range, `check_neighbor_table` could validate
-   entries against that range instead of against `[0, size)`, making a 1-based
-   table a codomain over `[1, n+1)` and `start_index` a non-issue
-   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
-   §4b).
+10. **The index origin of a bound table.** `NeighborTableType` records no index
+    origin, while UGRID standardizes `start_index` ∈ {0, 1}. `check_neighbor_table`
+    could validate entries against the codomain's absolute range instead of
+    `[0, size)` ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]] §4b).
 
 ## Implementation
 
@@ -1114,10 +813,9 @@ on its own, each based on the previous one:
 | C: GridTools/gt4py#2910 | `connectivities-as-types-6-class-keyed-providers` | `feat[next]!`: the tree and docs declare connectivities as classes; class-keyed offset providers with `check_offset_provider` at every entry point; `FieldOffset` removed; `as_offset(dim, field)`; `table_types` replaces `offset_provider_type`; migration script |
 | D: GridTools/gt4py#2912 | `connectivities-as-types-8-typed-positions` | `refactor[next]`: `MultiDimensionIndex` and typed embedded positions |
 
-The four PRs form GitHub stack GridTools/gt4py#2917. #2908 (absorbed by C),
-#2909 (absorbed by B) and #2911 (absorbed by A) are closed. `Domain`,
-`NeighborTableType`, `TableTypes` and `ts.ShiftType` land in B; `table_types`
-in C; ADR 0028 and ADR 0029 are in A and B respectively.
+The four PRs form GitHub stack GridTools/gt4py#2917. `NeighborTableType`,
+`TableTypes` and `ts.ShiftType` land in B, `table_types` in C; ADR 0028 and
+ADR 0029 are in A and B respectively.
 
 **ICON4Py migration.** `scripts/python/migrate_connectivities.py` (PR C)
 rewrites `Dimension(...)` and `FieldOffset(...)` declarations (connectivities
@@ -1132,6 +830,20 @@ ICON4Py.
 
 ## Appendices
 
+- [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|Cartesian axes, the CW-complex reading and alignment]]:
+  why an axis has exactly two cell classes and `Dims[...]` is the product complex's
+  bit vector; the alignment convention and its antisymmetry; why extents are
+  declared; the six axis-level alternatives and the staggering follow-ups.
+- [[personal/egparedes/connectivities-as-types/connectivities-as-types_identity|What type identity costs the IR, pickle and codegen]]:
+  the mechanics behind Identity rules 1 and 3–6 — reconstruction by import, the one
+  `copyreg` hook, fingerprinting, the injective codegen mangling and the
+  `Staggered[D]` tag grammar.
+- [[personal/egparedes/connectivities-as-types/connectivities-as-types_typing|Decisions made by running mypy and pyright]]:
+  why `Local` is annotated nowhere and must be a `TypeAlias` when shared, what the
+  `__add__` self-type costs, and why `Local[C]` and `V2E.Local` cannot be
+  reconciled. The two probes are its attachments.
+- [[personal/egparedes/connectivities-as-types/connectivities-as-types_alternatives|Alternatives considered]]:
+  the alternatives rejected on grounds other than the axis levels.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_research|Tag and name constraints — full catalogue]]:
   the five name spaces; the 10 cross-object identity constraints (A1–A10),
   9 name-format constraints (F1–F9) and 7 structural constraints (S1–S7),
