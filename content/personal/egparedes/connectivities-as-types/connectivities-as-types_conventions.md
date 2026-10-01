@@ -80,7 +80,7 @@ enumerates as 2ⁿ location names, and it does not stop at three axes.
 | Convention feature | This design | Verdict |
 | --- | --- | --- |
 | Connectivities named by entity pair (`face_node_connectivity`) | `NeighborConnectivity[Domain, Codomain]` — `face_node_connectivity` ≡ `NeighborConnectivity[Face, Node]` | isomorphic. The `Domain`/`Codomain` naming matches UGRID's reading direction, where `source`/`target` did not |
-| `_FillValue` required wherever an entry may be absent — ragged valence, but also a missing boundary neighbour in `edge_face_connectivity` / `face_face_connectivity`; `nMaxMesh2_face_nodes` | `skip_value`, `max_neighbors`, `min_neighbors` on `NeighborTableType` | strictly more informative. ICON's icosahedron carries 12 pentagons among hexagons, so `V2E` is `min_neighbors=5, max_neighbors=6`; UGRID can only record max 6 plus fill. That is the sketch's example verbatim |
+| `_FillValue` required wherever an entry may be absent — ragged valence, but also a missing boundary neighbour in `edge_face_connectivity` / `face_face_connectivity`; `nMaxMesh2_face_nodes` | `skip_value` and `max_neighbors` on `NeighborTableType`, and the optional `min_neighbors` on the declaration's `Local` | strictly more informative. ICON's icosahedron carries 12 pentagons among hexagons, so `V2E` is `min_neighbors=5, max_neighbors=6`; UGRID can only record max 6 plus fill. That is the sketch's example verbatim |
 | `vertical_dimensions` uses **the same** padding syntax as `face_dimensions` | — | the vertical is just another axis pair. SGRID needs no "vertical kind", which supports the conclusion that `DimensionKind.VERTICAL` is a layout and scan artefact, not geometry (main note, open question 6) |
 | `face_dimensions` specifies a padding **per axis** | a per-axis alignment, never grid-wide | supports the shape of the alignment follow-up (open question 5): a class keyword on the axis |
 | 3D topology forbidden for layered grids; use 2D + `vertical_dimensions` | horizontal topology plus a separate vertical axis | validates the existing split |
@@ -160,16 +160,29 @@ answering it, and it gives `LocationIndex` content worth having: a typed
 `Node`/`Edge`/`Face`/`Volume` vocabulary with degrees makes a UGRID mesh bind by
 construction, and makes "a primary, non-local dimension" expressible.
 
-### (b) Validate a bound table against the codomain's range, not against `[0, size)`
+### (b) Record the index origin of a bound table
 
 UGRID standardizes `start_index` ∈ {0, 1} on every connectivity array, and
 ICON4Py's tables come from Fortran. `NeighborTableType` carries `dtype`,
-`skip_value` and `max_neighbors` but no index origin. Since a codomain dimension
-has an absolute range, `check_neighbor_table` can validate entries against
-`codomain`'s `UnitRange` rather than against `[0, size)`, and a 1-based table is
-then simply a codomain with range `[1, n+1)`. That makes `start_index` a
-non-issue at the cost of one comparison in one function, and it is the same
-absolute-range argument as §3(i).
+`skip_value` and `max_neighbors` but no index origin, so nothing in the design
+distinguishes a 0-based table from a 1-based one.
+
+Checking entries against a codomain *range* is the tempting fix, and it is the
+same absolute-range argument as §3(i) — but it is **not** a one-line change, and
+the note's open question 10 should say so. Three prerequisites are missing:
+
+- a **codomain is a dimension class** and carries no range; ranges live on a
+  field's `Domain`, not on the declaration;
+- `check_neighbor_table` is handed only a declaration and a table or type, so the
+  target range would have to be supplied at binding time, from the field or the
+  mesh;
+- its **type-only path** (`table_types`, for ahead-of-time compilation) has no
+  entries to inspect at all, so any entry-level check is unavailable there.
+
+The cheap, available step is therefore to *record* the origin — a `start_index`
+on `NeighborTableType`, or a documented 0-based requirement plus a rebase in the
+loader — and to treat range validation as a separate question that depends on a
+mesh concept.
 
 ### (c) Record the orientation guarantee so incidence signs become derivable
 
@@ -226,7 +239,7 @@ the data, not only in a side dict.
 
 Aligning on vocabulary rather than mechanism makes a UGRID/SGRID reader on the
 `gtx` side straightforward: entity classes and connectivity declarations come
-from the convention, `start_index` resolves into the codomain range (b), ragged
+from the convention, `start_index` is recorded rather than inferred (b), ragged
 valence into `min_neighbors`/`max_neighbors`/`skip_value`, SGRID `padding` into
 the two members' absolute ranges (§3), and SGRID `location` into a `Dims[...]`
 bit vector. That is downstream of the whole PR stack and is a goal, not a

@@ -213,10 +213,12 @@ ahead-of-time compilation (`table_types`), never authored next to the declaratio
 A table alone cannot name its declaration — a sharer's table has the owner's domain
 dims and a different codomain — so the record is built from the provider key,
 taking whichever of the local dimension's `owner` or `sharers` the key names. A
-table bound under a name no declaration answers to (hand-written IR) gets the
-structural base `ConnectivityType`, which is also what `NeighborTable.__gt_type__()`
-returns and what types general connectivity values such as the index field of
-`as_offset`. It is what fingerprints a compiled variant: the owner's and a sharer's
+table bound under a name no declaration answers to (hand-written IR) still gets a
+`NeighborTableType`; what falls back is its `connectivity` field, which then holds
+the structural base `ConnectivityType` rather than a declaration, so `dtype`,
+`skip_value` and `max_neighbors` survive for compilation to consume. That
+structural type is also what `NeighborTable.__gt_type__()` returns and what types
+general connectivity values such as the index field of `as_offset`. It is what fingerprints a compiled variant: the owner's and a sharer's
 record over one table fingerprint differently.
 
 `ts.ShiftType` is what `V2E`, `V2E[1]`, `I + 1`, `K + 0.5` and `as_offset(K, f)`
@@ -378,9 +380,11 @@ stated as rules:
    **compiles it in the calling thread** instead of failing in a spawn worker.
 3. **No registry.** Classes pickle by reference. The one narrow `copyreg` hook is
    for `Staggered[D]`, whose bracketed qualname `save_global` cannot look up.
-4. **Fingerprints depend on qualified names**, so a redefinition under the same
-   name does not reuse artifacts and the ADR 0023 build cache invalidates on
-   module renames.
+4. **Fingerprints depend on qualified names.** A dimension is fingerprinted by
+   reference, so redefining one under the same name with a different `kind` does
+   *not* invalidate artifacts (open question 5). A connectivity declaration is
+   fingerprinted *additionally* by its domain, codomain, `Local` and counts, so
+   redefining one does. Either way the ADR 0023 cache invalidates on module renames.
 5. **Codegen names need injective mangling.** `codegen_name(tag)` is a prefix
    escape (`_`→`_u`, `.`→`_d`, `[`→`_l`, `]`→`_r`); the obvious alternative is
    not injective.
@@ -462,7 +466,9 @@ at most one `LOCAL` dimension; and `VERTICAL` names the scan axis and, by
 convention, the undecomposed one. The first and third are now class facts —
 `kind == LOCAL` iff `issubclass(d, LocalDimensionIndex)` — so **`LOCAL` leaves the
 enum**: `kind` becomes `HORIZONTAL | VERTICAL` and `order_dimensions` sorts by
-`(is_local, kind, base.tag)` with `is_local` read from the class (PR B, where
+the rank it uses today, with localness read from the class instead of from the
+enum — the horizontal/local/vertical order must not move, or sparse-field layout
+changes with it (PR B, where
 `LocalDimensionIndex` lands). What is left is the layout key and the "vertical"
 role, which belong to the field and to the program respectively — see
 [Open questions](#open-questions--follow-ups).
@@ -502,8 +508,9 @@ of [Cartesian axis dimensions](#cartesian-axis-dimensions).
   `Staggered[K]` stays a `DimensionIndex` and no annotation widens; verified in
   [`staggered_probe.py`](staggered_probe.py). Nothing stronger is claimed. The
   equation `Staggered[Staggered[K]] = K` is semantically right — `Staggered` is
-  an involution on the two cell classes — but Python typing has no type-level
-  reduction, so `Field[Dims[K]]` and a hypothetical
+  an involution on the two cell *classes*, a different operation from composing
+  two half-integer shifts (which lands on `K` one cell over, not on the same
+  index) — but Python typing has no type-level reduction, so `Field[Dims[K]]` and a hypothetical
   `Field[Dims[Staggered[Staggered[K]]]]` would be mutually incompatible nominal
   types. Making the nested form unrepresentable sidesteps the equation instead
   of asserting it.
@@ -793,9 +800,12 @@ equality with an interning registry; and static-only `max_neighbors` /
    identity story both depend on this being benign; it is not established here,
    and the ADR 0028 implementation should say which of the two rules wins.
 10. **The index origin of a bound table.** `NeighborTableType` records no index
-    origin, while UGRID standardizes `start_index` ∈ {0, 1}. `check_neighbor_table`
-    could validate entries against the codomain's absolute range instead of
-    `[0, size)` ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]] §4b).
+    origin, while UGRID standardizes `start_index` ∈ {0, 1}. Validating entries
+    against a codomain *range* is not a one-line change: a codomain is a dimension
+    class and carries no range, `check_neighbor_table` receives only a declaration
+    and a table or type, and its type-only path (`table_types`) has no entries to
+    inspect. It would need a target range supplied at binding time and a
+    value-carrying table ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]] §4b).
 
 ## Implementation
 
@@ -869,7 +879,7 @@ ICON4Py.
   staggering — why UGRID's locations are cell degrees while SGRID's are per-axis
   bit vectors, how SGRID's four `padding` values decode into single absolute
   ranges, and the enhancements that follow (a UGRID vocabulary for
-  `LocationIndex`, validating a bound table against its codomain's range,
+  `LocationIndex`, recording the index origin of a bound table,
   deriving incidence signs from a recorded node ordering).
 - [`staggered_probe.py`](staggered_probe.py): the mypy / pyright probes behind
   [Cartesian axis dimensions](#cartesian-axis-dimensions) — `Staggered[Staggered[I]]`,
