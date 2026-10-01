@@ -1,7 +1,7 @@
 ---
 title: "Connectivities as types: one declaration for offset, local dimension and provider key"
 author: egparedes
-tags: [type-system, type-checking, dimensions, local-dimensions, connectivities, offset-provider, unstructured, neighbor-sum, reduction, frontend, foast, gtir, embedded, gtfn, dace, nominal-types, dependent-types, metaclass, serialization, fingerprint, staggering, axis-dimensions, cw-complex, exterior-calculus, domain, dimension-kind, migration, adr, tech-debt, shared-local-dimensions, implemented]
+tags: [type-system, type-checking, dimensions, local-dimensions, connectivities, offset-provider, unstructured, neighbor-sum, reduction, frontend, foast, gtir, embedded, gtfn, dace, nominal-types, dependent-types, metaclass, serialization, fingerprint, staggering, axis-dimensions, cw-complex, exterior-calculus, domain, dimension-kind, ugrid, sgrid, migration, adr, tech-debt, shared-local-dimensions, implemented]
 created: 2026-09-17
 updated: 2026-10-01
 status: draft
@@ -454,9 +454,11 @@ Two consequences shape the hierarchy:
 **The alignment is antisymmetric, so the convention is the user's to pick.** The
 ADR 0026 convention places `Staggered[D](i)` at `i - 1/2` in `D`'s coordinates;
 equivalently, it places `D(j)` at `j + 1/2` in `Staggered[D]`'s. Both conventions
-appear in production codes — whether `u(i)` is the west or the east face of cell
-`i` differs between codebases, as does whether half level `k` sits above or below
-full level `k` — and either is reachable by choosing *which member of the pair to
+appear in production codes — the SGRID convention's four `padding` values
+enumerate both, `low` and `both` placing a cell at `j - 1/2` while `none` and
+`high` place it at `j + 1/2`
+([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
+§3) — and either is reachable by choosing *which member of the pair to
 declare*. The default puts the partner half a cell *below*; to have it half a cell
 *above* your main field, declare the axis the **partner** lives on and alias your
 main field onto the derived member. With `class IFace(CartesianAxisIndex)` and
@@ -484,8 +486,11 @@ sizes — see
 for why absolute addressing is the right domain model — and the periodic case
 needs nothing extra, the two ranges simply coincide in size. The invariant a grid
 builder owes is that the two ranges *interleave*, hence differ in size by exactly
-one when the axis is bounded and are equal when it is periodic. No component of
-this design sees both ranges at once, so enforcing it belongs to whatever
+one when the axis is bounded and are equal when it is periodic. An absolute range
+is strictly more expressive than SGRID's `padding` enum here: each of its four
+values is one `UnitRange` under a single alignment convention, and
+`padding: low` is exactly the halo cell named above. No component of this design
+sees both ranges at once, so enforcing it belongs to whatever
 constructs both
 ([[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos|a mesh
 concept with first-class halos]]). Note also that `order_dimensions` giving a
@@ -1000,8 +1005,11 @@ the declared level.
    would be its natural home.
 4. **Chain proposals.** Their static encodings need rewriting to `C.Local`
    ([Relation to `Local[V2E]`](#relation-to-localv2e)).
-5. **Parameterizing the alignment.** The ADR 0026 convention is hard-coded. The
-   antisymmetry above makes both conventions reachable by choosing which member of
+5. **Parameterizing the alignment.** The ADR 0026 convention is hard-coded, while
+   SGRID's `padding` attribute exists precisely because production codes use both
+   alignments
+   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
+   §3). The antisymmetry above makes both conventions reachable by choosing which member of
    the pair to declare, at a cosmetic cost in the derived member's tag; a per-axis
    class keyword (`class X(CartesianAxisIndex, stagger=Align.ABOVE)`) would remove
    even that. It would have to be **static, on the axis**: it changes the integer
@@ -1025,7 +1033,9 @@ the declared level.
    alike, and what singles out `K` is that the numerics is sequential along it and
    that it is not decomposed, properties of the program and of the decomposition.
    [[personal/havogt/scan-redesign/scan-redesign|Scan redesign]] already takes the
-   scan range from the output domain rather than from `kind`. Every candidate
+   scan range from the output domain rather than from `kind`, and SGRID describes
+   vertical staggering with the *same* `padding` syntax as horizontal, so it needs
+   no vertical kind at all. Every candidate
    *addition* to `kind` — periodic, distributed, sequential, cell degree — likewise
    belongs to the grid, the program or the range, so `kind` should shrink rather
    than grow.
@@ -1038,14 +1048,29 @@ the declared level.
    and nothing consumes it until an exterior-calculus surface exists (Proposal 1
    of
    [[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]).
-   Revisit if that surface lands.
+   Revisit if that surface lands — but note that a degree is *canonical* for a mesh
+   location and only *declarational* for a Cartesian axis, so it belongs on the
+   `LocationIndex` of the next item rather than here
+   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
+   §4a).
 8. **A `LocationIndex` level for mesh locations.** `CartesianAxisIndex` separates
    Cartesian axes from everything else, but `V`, `E`, `C` stay direct
    `DimensionIndex` subclasses, so "a primary, non-local dimension" — what
    `NeighborConnectivity[Domain, Codomain]` and `MultiDimensionIndex` actually
    want, and check at runtime — is still not a type. A fourth level would give
    it, at the cost of a second per-declaration migration decision. Out of scope
-   here.
+   here, but it has a ready-made vocabulary: UGRID's `node`/`edge`/`face`/`volume`
+   gated by `topology_dimension`, whose location names *are* cell degrees
+   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
+   §4a).
+9. **The index origin of a bound table.** `NeighborTableType` records `dtype`,
+   `skip_value` and `max_neighbors` but no index origin, while UGRID standardizes
+   `start_index` ∈ {0, 1} and ICON4Py's tables come from Fortran. Since a codomain
+   dimension carries an absolute range, `check_neighbor_table` could validate
+   entries against that range instead of against `[0, size)`, making a 1-based
+   table a codomain over `[1, n+1)` and `start_index` a non-issue
+   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
+   §4b).
 
 ## Implementation
 
@@ -1099,6 +1124,13 @@ ICON4Py.
   also when only the local dimension differs; generated `ClassVar` form and
   `Local[C]` reconciliation do not). Last run with mypy 2.3.1 and pyright
   1.1.414.
+- [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|Alignment with the UGRID and SGRID conventions]]:
+  an audit against the two community conventions for mesh topology and grid
+  staggering — why UGRID's locations are cell degrees while SGRID's are per-axis
+  bit vectors, how SGRID's four `padding` values decode into single absolute
+  ranges, and the enhancements that follow (a UGRID vocabulary for
+  `LocationIndex`, validating a bound table against its codomain's range,
+  deriving incidence signs from a recorded node ordering).
 - [`staggered_probe.py`](staggered_probe.py): the mypy / pyright probes behind
   [Cartesian axis dimensions](#cartesian-axis-dimensions) — `Staggered[Staggered[I]]`,
   `Staggered[V2E.Local]` and `Staggered[C]` are `[type-var]` errors, while
