@@ -169,7 +169,7 @@ distinguishes a 0-based table from a 1-based one.
 
 Checking entries against a codomain *range* is the tempting fix, and it is the
 same absolute-range argument as §3(i) — but it is **not** a one-line change, and
-the note's open question 10 should say so. Three prerequisites are missing:
+the note's open question 9 should say so. Three prerequisites are missing:
 
 - a **codomain is a dimension class** and carries no range; ranges live on a
   field's `Domain`, not on the declaration;

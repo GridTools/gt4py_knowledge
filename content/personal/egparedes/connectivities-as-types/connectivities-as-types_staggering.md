@@ -133,7 +133,21 @@ are both `HORIZONTAL` and only the first is an axis. That is why the migration
 cannot be inferred from the source — whether a dimension is an axis or a mesh
 location is a decision per declaration (about ten in ICON4Py's `dimension.py`;
 near-uniformly `CartesianAxisIndex` in `tests/next_tests`). The migration script
-rewrites what it can and reports the rest.
+decides per declaration, in this order:
+
+1. **`CartesianAxisIndex`** if the dimension is `kind=VERTICAL`; or is the
+   source/target of a *Cartesian* `FieldOffset` (source appears in target, no local
+   dimension); or is used with `as_offset`; or has a staggered counterpart
+   referenced anywhere (an `_Staggered`-prefixed name under the old encoding).
+2. **`DimensionIndex`** if it is the source or the target domain dimension of a
+   *neighbor* `FieldOffset` — a mesh location.
+3. Otherwise **`DimensionIndex`**, and the dimension is listed in the report as
+   "declare as `CartesianAxisIndex` if it is a Cartesian axis: index arithmetic,
+   `Staggered`". A structured horizontal axis with no Cartesian offset in the
+   source lands here, because nothing distinguishes it from a mesh location.
+
+A dimension matching both (1) and (2) is a **conflict**: the script reports it
+rather than choosing, since the two are mutually exclusive by construction.
 
 ## 5. Relation to `dimension-generic-fields`, and one naming constraint
 
