@@ -11,7 +11,7 @@ See [`AGENTS.md`](AGENTS.md) for the structure, authoring workflow, and the rule
 for keeping [`content/index.md`](content/index.md) useful.
 
 Every proposal must include a `status` field in its frontmatter: `draft`
-(default), `reviewed`, or `final`.
+(default), `reviewed`, `final`, or `retired` (archived; see `AGENTS.md`).
 
 ## Structure
 
@@ -26,6 +26,7 @@ content/
         <proposal>_research.md  # optional appendix: background, research, prior art
         <proposal>_<topic>.md   # optional further appendices
   shared/               # proposals that are discussed by the team (only touch with PR review)
+  archive/              # retired proposals, kept in git (NOT published — see ignorePatterns)
   templates/            # idea template (NOT published — see ignorePatterns)
 quartz.config.ts        # Quartz config (set baseUrl to the Pages URL)
 quartz.layout.ts        # Quartz layout

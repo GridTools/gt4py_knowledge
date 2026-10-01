@@ -307,7 +307,7 @@ proved.
   relations enumerating it.
 - **A brand per mesh entity (§7).** Nominal identity makes two independently
   declared `Vertex` classes distinct types, statically and at run time. The
-  `(name, kind)` equality of the superseded [[shared/dimensions-as-types|dimensions as types]]
+  `(name, kind)` equality of the superseded [dimensions as types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md)
   is the unbranded `Fin<g.nV>` of §7: equal names, interchangeable indices.
   Nominal identity is not sufficient to separate two *meshes* that share the
   same declarations, though — see below.

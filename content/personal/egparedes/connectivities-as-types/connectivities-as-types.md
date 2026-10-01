@@ -53,8 +53,8 @@ status: draft
 > The remap typing it needs is the `Connectivity[NewD, D0]` rule of
 > [[personal/havogt/dimension-generic-fields/dimension-generic-fields|Generic dimensions and statically
 > typed staggering]], whose Part II also proposed the `Staggered[D]` shape
-> used here. It **supersedes** [[shared/dimensions-as-types|Dimensions as
-> types]]: the dimension design below (ADR 0028) replaces that note's
+> used here. It **supersedes** [Dimensions as
+> types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md): the dimension design below (ADR 0028) replaces that note's
 > `(name, kind)` value identity and interning registry with type identity, and
 > is stated here in full. It overlaps with
 > [[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos|A mesh concept with
@@ -313,7 +313,7 @@ embeds its base's full tag, rule 1; a connectivity is *named in the IR* by its
 `offset_tag`, rule 7). The static view (checkers see nominal types) and the
 runtime view (equality is `is`) agree by construction, and the tag is a
 valid, unique IR string. This is the point on which this note supersedes
-[[shared/dimensions-as-types|dimensions as types]] and GridTools/gt4py#2844,
+[dimensions as types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md) and GridTools/gt4py#2844,
 which chose `(name, kind)` value equality plus an interning registry so that
 the test tree's many independently declared `IDim`s stay interchangeable.
 Under value equality the `typing` subscription cache aliases
@@ -683,7 +683,7 @@ once dimensions are classes, the nested-class form is both simpler and
 statically meaningful.
 
 **`(name, kind)` value equality with an interning registry** (the design of
-[[shared/dimensions-as-types|dimensions as types]] and GridTools/gt4py#2844).
+[dimensions as types](https://github.com/GridTools/gt4py_knowledge/blob/main/content/archive/dimensions-as-types.md) and GridTools/gt4py#2844).
 Keeps independently declared same-named dimensions interchangeable and
 avoids the importability rule. Rejected because it decouples the Python
 type's identity from the IR's, needs a registry plus `copyreg` plus a custom
