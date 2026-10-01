@@ -7,13 +7,29 @@ status: draft
 paginate: true
 ---
 
+## Rendering this deck
+
+```console
+npx -y @marp-team/marp-cli@4 --no-stdin \
+    connectivities-as-types_slides.md --html -o /tmp/deck.html
+```
+
+- **`--no-stdin` is required** — without it marp-cli waits on stdin and looks like a hang
+- add `--pdf` for a PDF; that path needs a Chromium-family browser
+- the first run downloads marp-cli and may take several minutes, later runs under a second
+- the file also reads as an ordinary page in the garden, scrolling rule to rule
+
+→ [Appendices](connectivities-as-types#appendices)
+
+---
+
 # Connectivities as types
 
 One declaration for offset, local dimension and provider key
 
 ADR 0028 (dimensions) · ADR 0029 (connectivities) · GridTools/gt4py#2917
 
-> **Appendix** to [Connectivities as types](connectivities-as-types), summarising that note as of commit `21e6b8f`. Every slide links the section it compresses and this deck adds no facts of its own, so where the two disagree the note wins. Rendering instructions are on the last slide.
+> **Appendix** to [Connectivities as types](connectivities-as-types), summarising that note as of commit `21e6b8f`. Every slide links the section it compresses and this deck adds no facts of its own, so where the two disagree the note wins. Rendering instructions are on the slide before this one.
 
 ---
 
@@ -168,19 +184,3 @@ ICON4Py: the script rewrites 4 files and reports 46 provider keys to decide.
 - **alignment** — `Staggered[D](i)` at `i − ½` is hard-coded; both conventions exist in production
 
 → [Open questions](connectivities-as-types#open-questions--follow-ups)
-
----
-
-## Rendering this deck
-
-```console
-npx -y @marp-team/marp-cli@4 --no-stdin \
-    connectivities-as-types_slides.md --html -o /tmp/deck.html
-```
-
-- **`--no-stdin` is required** — without it marp-cli waits on stdin and looks like a hang
-- add `--pdf` for a PDF; that path needs a Chromium-family browser
-- the first run downloads marp-cli and may take several minutes, later runs under a second
-- the file also reads as an ordinary page in the garden, scrolling rule to rule
-
-→ [Appendices](connectivities-as-types#appendices)
