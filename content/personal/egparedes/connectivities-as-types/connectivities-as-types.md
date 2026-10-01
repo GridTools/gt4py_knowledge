@@ -471,7 +471,10 @@ Four checks the tree performs at runtime, or not at all, become static:
 The last row is enforced **both** statically and at runtime, as `Staggered[C]` is:
 `DimensionMeta.__add__` and `__sub__` carry the self-type
 `cls: type[AnyCartesianAxisIndex]` and also raise `TypeError` for anything else, and
-FOAST rejects `C + 1` and `as_offset(C, f)` in DSL code with a `DSLError`. Only
+FOAST rejects `C + 1` in DSL code with a `DSLError`. `as_offset(dim, field)` is
+restricted the same way, typed `dim: type[AnyCartesianAxisIndex]` so that a
+staggered partner is still accepted, raising a `DSLError` in a field operator and a
+`TypeError` in embedded execution (PR C, where `as_offset(dim, field)` lands). Only
 `+`/`-` and `as_offset` are restricted — comparison still builds a `Domain` on any
 dimension, which `concat_where` needs over `CellDim`/`EdgeDim`. Hand-written
 iterator IR is unchecked, since it names dimensions by tag like the rest of the IR.
@@ -516,7 +519,8 @@ of [Cartesian axis dimensions](#cartesian-axis-dimensions).
 - **Runtime representation.** `Staggered[K]` is a real, interned class:
   `Staggered` has a metaclass whose `__getitem__` builds one class per base
   and caches it by base identity (with `setdefault`, so concurrent
-  compilation threads see one class). Its base is `AnyCartesianAxisIndex`, and it is
+  compilation threads see one class). `Staggered[K]`'s only base is `Staggered`,
+  which derives from `AnyCartesianAxisIndex` — so it is an axis by inheritance and
   deliberately *not* a subclass of `K`, so a `Field[Dims[Staggered[K]]]` is
   rejected where a `Field[Dims[K]]` is required; it has `base = K` and `K`'s
   kind. Staggering anything that is not a declared `CartesianAxisIndex` — a local
@@ -842,9 +846,9 @@ on its own, each based on the previous one:
 
 | PR | Branch | What |
 | --- | --- | --- |
-| A: GridTools/gt4py#2899 | `connectivities-as-types-2-dimension-classes` | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0029); `codegen_name`; `CartesianAxisIndex` / `AnyCartesianAxisIndex` (both exported from `gtx`) and `Staggered[D: CartesianAxisIndex]`, with `__add__`/`__sub__` restricted to an axis statically and at runtime; interactive-`__main__` fallback; `NamedIndex` and the dimension half of the mypy plugin removed; `ConstList` with `size=1` replaces the `_CONST_DIM` aliases; `AxisLiteral` drops `kind`; printing IR never imports (`resolve_loaded`); offset tag = local dimension tag = provider key in the tree |
-| B: GridTools/gt4py#2907 | `connectivities-as-types-3-neighbor-connectivity` | `feat[next]`: `NeighborConnectivity[Domain, Codomain]`, `LocalDimensionIndex` (and `DimensionKind.LOCAL` removed: a local's `kind` is `None`, localness comes from `common.is_local_dimension`, and `order_dimensions` ranks horizontal/local/vertical explicitly), `check_neighbor_table`, `local_dimension_of`, declaration fingerprinting; usable in the DSL; shared local dimensions, in the declarations and in the backends (`connectivity_key_over`, DaCe `local_dimension_size`); `NeighborTableType` and `ts.ShiftType`; pyright in the typing nox session; ADR 0030 |
-| C: GridTools/gt4py#2910 | `connectivities-as-types-6-class-keyed-providers` | `feat[next]!`: the tree and docs declare connectivities as classes; class-keyed offset providers with `check_offset_provider` at every entry point; `FieldOffset` removed; `as_offset(dim, field)`; `table_types` replaces `offset_provider_type`; migration script |
+| A: GridTools/gt4py#2899 | `connectivities-as-types-2-dimension-classes` | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0029); `codegen_name`; `CartesianAxisIndex` / `AnyCartesianAxisIndex` (both exported from `gtx`) and `Staggered[D: CartesianAxisIndex]`, with `__add__`/`__sub__` restricted to an axis statically and at runtime; interactive-`__main__` fallback; `NamedIndex` and the dimension half of the mypy plugin removed; mypy typing case `cartesian_axis_levels`; `ConstList` with `size=1` replaces the `_CONST_DIM` aliases; `AxisLiteral` drops `kind`; printing IR never imports (`resolve_loaded`); offset tag = local dimension tag = provider key in the tree |
+| B: GridTools/gt4py#2907 | `connectivities-as-types-3-neighbor-connectivity` | `feat[next]`: `NeighborConnectivity[Domain, Codomain]`, `LocalDimensionIndex` (and `DimensionKind.LOCAL` removed: a local's `kind` is `None`, localness comes from `common.is_local_dimension`, and `order_dimensions` ranks horizontal/local/vertical explicitly), `check_neighbor_table`, `local_dimension_of`, declaration fingerprinting; usable in the DSL; shared local dimensions, in the declarations and in the backends (`connectivity_key_over`, DaCe `local_dimension_size`); `NeighborTableType` and `ts.ShiftType`; pyright in the typing nox session, with `reportUnnecessaryTypeIgnoreComment: error` so a rejection that stops firing fails the run; ADR 0030 |
+| C: GridTools/gt4py#2910 | `connectivities-as-types-6-class-keyed-providers` | `feat[next]!`: the tree and docs declare connectivities as classes; class-keyed offset providers with `check_offset_provider` at every entry point; `FieldOffset` removed; `as_offset(dim, field)` restricted to an `AnyCartesianAxisIndex`; `table_types` replaces `offset_provider_type`; migration script |
 | D: GridTools/gt4py#2912 | `connectivities-as-types-8-typed-positions` | `refactor[next]`: `MultiDimensionIndex` and typed embedded positions |
 
 The four PRs form GitHub stack GridTools/gt4py#2917. `NeighborTableType`,
@@ -856,11 +860,15 @@ rewrites `Dimension(...)` and `FieldOffset(...)` declarations (connectivities
 adopt their existing local dimensions, so `C2EDim` etc. keep working and
 `C2CE` becomes a sharer), removes Cartesian offsets and rewrites their uses
 (`Koff[1]` → `KDim + 1`, `as_offset(KDim, ...)`, imports), and reports what
-it cannot decide from the source. At ICON4Py `89b4967` (2026-09-21) the
-script rewrites 4 files (`dimension.py` and 3 stencil modules) and reports 46
-connectivity provider keys, 2 removable Cartesian provider entries and 10
-`isinstance(..., Dimension)` sites in 5 modules. Declaring counts is left to
-ICON4Py.
+it cannot decide from the source. At ICON4Py `89b4967` (2026-09-21) the script
+rewrites 4 files (`dimension.py` and 3 stencil modules) and classifies every
+dimension with no undecided cases and no conflicts: `KDim` as a
+`CartesianAxisIndex`, `EdgeDim`/`CellDim`/`VertexDim` as `DimensionIndex`, and all
+15 `*Dim` locals including `LsqUnkDim` as `LocalDimensionIndex`. It reports 46
+connectivity provider keys, 2 removable Cartesian provider entries, 5
+`isinstance(..., Dimension)` sites in 2 modules, and 6 `DimensionKind.LOCAL` uses
+in 5 modules to be replaced by `common.is_local_dimension`. Declaring counts is
+left to ICON4Py.
 
 ## Appendices
 

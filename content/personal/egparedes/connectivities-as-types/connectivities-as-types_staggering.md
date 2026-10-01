@@ -135,19 +135,21 @@ location is a decision per declaration (about ten in ICON4Py's `dimension.py`;
 near-uniformly `CartesianAxisIndex` in `tests/next_tests`). The migration script
 decides per declaration, in this order:
 
-1. **`CartesianAxisIndex`** if the dimension is `kind=VERTICAL`; or is the
-   source/target of a *Cartesian* `FieldOffset` (source appears in target, no local
-   dimension); or is used with `as_offset`; or has a staggered counterpart
-   referenced anywhere (an `_Staggered`-prefixed name under the old encoding).
-2. **`DimensionIndex`** if it is the source or the target domain dimension of a
-   *neighbor* `FieldOffset` — a mesh location.
-3. Otherwise **`DimensionIndex`**, and the dimension is listed in the report as
-   "declare as `CartesianAxisIndex` if it is a Cartesian axis: index arithmetic,
-   `Staggered`". A structured horizontal axis with no Cartesian offset in the
-   source lands here, because nothing distinguishes it from a mesh location.
+1. **`CartesianAxisIndex`** on any of this axis evidence: `kind=VERTICAL`; the
+   source of a *Cartesian* `FieldOffset`; the first argument of `as_offset(...)` or
+   `flip_staggered(...)`; **index arithmetic `D ± <number>` in the source**, which
+   v1.2.2 code could already write as `KDim + 1`; or a string constant
+   `"_Staggered<old Dimension value>"`, the old encoding of a staggered partner.
+2. **`DimensionIndex`** on mesh-location evidence: the source or the target domain
+   dimension of a *neighbor* `FieldOffset`.
+3. Otherwise **`DimensionIndex`**, reported as "declare it as `CartesianAxisIndex`
+   if it is a Cartesian axis (index arithmetic, `Staggered`)". A structured
+   horizontal axis with no Cartesian offset in the source lands here, because
+   nothing in the source distinguishes it from a mesh location.
 
-A dimension matching both (1) and (2) is a **conflict**: the script reports it
-rather than choosing, since the two are mutually exclusive by construction.
+A dimension carrying **both** kinds of evidence is a conflict: the script declares
+it `DimensionIndex` and reports it for a hand decision rather than choosing, since
+the two are mutually exclusive by construction.
 
 ## 5. Relation to `dimension-generic-fields`, and one naming constraint
 
