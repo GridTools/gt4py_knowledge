@@ -187,12 +187,29 @@ mesh concept.
 ### (c) Record the orientation guarantee so incidence signs become derivable
 
 UGRID says face corner nodes "should be specified in anticlockwise (also referred
-to as counterclockwise) direction as viewed from above". Where that holds, the
-incidence signs — the `d` of `div = ⋆d⋆` — are **derivable from
-`face_node_connectivity`** instead of supplied. Note the modal verb: the
+to as counterclockwise) direction as viewed from above". Note the modal verb: the
 convention *recommends* the ordering rather than mandating it, so a consumer
-cannot assume it — which is exactly why a gt4py-side declaration would have to
-record the guarantee rather than infer it. The main note explains why
+cannot assume it — which is why a gt4py-side declaration would have to record the
+guarantee rather than infer it.
+
+But recording that guarantee is **not sufficient** to derive the incidence signs —
+the `d` of `div = ⋆d⋆`. Anticlockwise face-node order fixes the orientation of the
+*face*, not of each globally indexed edge. For a face `(0, 1, 2)`, reversing edge
+`(0, 1)` to `(1, 0)` flips its incidence coefficient from `+1` to `−1` while
+`face_node_connectivity` is unchanged. Deriving a sign therefore needs three
+things, not one:
+
+- the face's node ordering (the anticlockwise guarantee);
+- **each edge's own node ordering** — `edge_node_connectivity`, which fixes the
+  edge field's sign convention;
+- the **face-to-edge mapping** relating the two, `face_edge_connectivity`.
+
+So an `orientation=` marker on a `C2V`-shaped declaration supplies one of the three
+and none of the metric factors — the `⋆` of
+[[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]
+§3.6. The honest claim is narrower than "derivable": with all three orderings
+recorded, the *topological* part `d` becomes computable, while `⋆` remains mesh
+geometry that has to be supplied. The main note explains why
 the Cartesian side needs no orientation data (a product of intervals is
 canonically oriented per axis) and points at ICON's `geofac_div` for the
 unstructured side, where the signs are materialized. UGRID shows the

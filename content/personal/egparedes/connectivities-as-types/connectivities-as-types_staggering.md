@@ -100,7 +100,9 @@ a reference implementation and on boundary index ranges.
 
 **Extents are declared, never derived.** A path complex has `n` 0-cells and
 `n - 1` 1-cells; a cycle has `n` and `n`. So the two members of a pair do not in
-general have the same range, and *which one is wider is the degree assignment*:
+general have the same range, and for a bounded, halo-free complex *which one is
+wider is the degree assignment* (periodicity or halo padding destroys that
+correspondence — see §7):
 with `I` the 0-cells on `[0, n)`, the interior 1-cells are `[I(i-1), I(i)]` for
 `i` in `[1, n)`, and `Staggered[I](0)` is the first cell outside the complex —
 exactly where a halo cell goes; with `K` the 1-cells on `[0, n)` (ICON's layers),
@@ -189,7 +191,7 @@ per-*pair* fact at every use site, so two modules can disagree about one grid, a
 it duplicates the whole bracketed-tag apparatus (a second interned family, tag
 grammar, `copyreg` hook and codegen escape). Parameterizing the alignment, if it
 is done at all, is one class keyword on the declared axis — see
-[Open questions]([[personal/egparedes/connectivities-as-types/connectivities-as-types#open-questions--follow-ups).
+[[personal/egparedes/connectivities-as-types/connectivities-as-types#open-questions--follow-ups|Open questions]].
 
 **Declaring both members of a pair** (`class ICell(CartesianAxisIndex, dual_of=IFace,
 offset=+0.5)`). The explicit form, rejected for the reason this note exists: it
@@ -227,13 +229,16 @@ Numbered as in the main note's *Open questions*.
 7. **A cell `degree` on the axis.** Making the degree assignment static
    (`degree=0|1`) would let a coboundary be typed generically
    (`d⁰: Field[deg 0] -> Field[deg 1]`) and make the range invariant derivable
-   rather than declared. Left out for now: it duplicates what the absolute ranges
-   already say, creating exactly the cross-object agreement this note removes; it
-   does not fix the extent relation without periodicity, which cannot be static;
-   and nothing consumes it until an exterior-calculus surface exists (Proposal 1
+   rather than declared. Left out for now because **nothing consumes it** until an
+   exterior-calculus surface exists (Proposal 1
    of
    [[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]).
-   Revisit if that surface lands — but note that a degree is *canonical* for a mesh
+   Absolute ranges do **not** determine the
+   degree in general: a periodic axis gives both classes `[0, n)` under either
+   assignment, and halo padding makes the relative widths arbitrary. A static degree
+   needs no periodicity and would not be ill-defined — it is *deriving extents* that
+   needs the degree together with a periodicity and halo policy. Revisit if that
+   surface lands — but note that a degree is *canonical* for a mesh
    location and only *declarational* for a Cartesian axis, so it belongs on the
    `LocationIndex` of the next item rather than here
    ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]

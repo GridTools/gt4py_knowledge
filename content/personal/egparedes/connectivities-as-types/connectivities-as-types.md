@@ -781,9 +781,13 @@ equality with an interning registry; and static-only `max_neighbors` /
    the program, not of the dimension. Every candidate *addition* belongs to the
    grid, the program or the range, so `kind` should shrink rather than grow; see
    [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]] §7.
-7. **A cell `degree` on the axis.** Left out: it duplicates what the absolute
-   ranges already say, needs periodicity (which cannot be static), and has no
-   consumer until an exterior-calculus surface exists. A degree is *canonical* for
+7. **A cell `degree` on the axis.** Left out because **nothing consumes it** until
+   an exterior-calculus surface exists; a static `degree=0|1` is itself perfectly
+   well defined and needs no periodicity. The ranges do *not* substitute for it: a
+   periodic axis gives both classes `[0, n)` under either assignment and halo
+   padding makes the widths arbitrary, so degree is not inferable from extents in
+   general. The dependency runs the other way — *deriving extents* needs the degree
+   plus a periodicity and halo policy. A degree is *canonical* for
    a mesh location and only *declarational* for an axis, so it belongs on the
    `LocationIndex` of the next item; see [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]]
    and [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions]] §4a.
