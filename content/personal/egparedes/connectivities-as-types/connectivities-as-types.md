@@ -97,8 +97,8 @@ path and the operation:
 | --- | --- | --- | --- |
 | embedded | shift `a(V2E[1])` | N1 `FieldOffset.value` | `ffront/fbuiltins.py:494` |
 | embedded | `neighbor_sum(..., axis=V2EDim)` | N3 `axis.value` | `embedded/nd_array_field.py:983` — with the comment `# assumes offset and local dimension have same name` |
-| compiled | shift | **N2 `foast.Name.id`** | `ffront/foast_to_gtir.py:305, 331` |
-| compiled | reduction | N3 `ListType.offset_type.value` | `iterator/transforms/unroll_reduce.py:47` |
+| compiled | shift | **N2 `foast.Name.id`** | `ffront/foast_to_gtir.py:305` (`im.shift(offset_name.id, ...)`) |
+| compiled | reduction | **N2 `foast.Name.id`**, then N3 `ListType.offset_type.value` | `ffront/foast_to_gtir.py:331` (`im.as_fieldop_neighbors(str(offset_name), ...)`); `iterator/transforms/unroll_reduce.py:47` |
 | compiled | sparse field *argument* | N3 `dim.value` | `codegens/gtfn/gtfn_module.py:95`; `dace/lowering/gtir_to_sdfg.py:581` |
 
 Two of these were confirmed by execution against v1.2.2: embedded and compiled
