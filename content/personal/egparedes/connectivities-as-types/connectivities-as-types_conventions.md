@@ -126,9 +126,9 @@ netCDF *dimensions* are 0-based but SGRID *labels* need not be. What a `UnitRang
 still adds is that the origin travels with the dimension in one object rather than
 in a separate coordinate variable, and that halo depth is unbounded.
 
-**(ii) `padding: low` is this note's halo remark, standardized.** The main note
-observes that `Staggered[I](0)` "is the first cell outside the complex — exactly
-where a halo cell goes". That is `low`: equal length, one extra value stored at
+**(ii) `padding: low` is this note's halo remark, standardized.**
+[[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|The staggering appendix]] §3 observes that `Staggered[I](0)` "is the
+first cell outside the complex — exactly where a halo cell goes". That is `low`: equal length, one extra value stored at
 the low end.
 
 **(iii) Both alignments are standardized and in production, which strengthens
@@ -209,8 +209,8 @@ and none of the metric factors — the `⋆` of
 [[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]
 §3.6. The honest claim is narrower than "derivable": with all three orderings
 recorded, the *topological* part `d` becomes computable, while `⋆` remains mesh
-geometry that has to be supplied. The main note explains why
-the Cartesian side needs no orientation data (a product of intervals is
+geometry that has to be supplied. [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|The staggering appendix]] §1
+explains why the Cartesian side needs no orientation data (a product of intervals is
 canonically oriented per axis) and points at ICON's `geofac_div` for the
 unstructured side, where the signs are materialized. UGRID shows the
 unstructured side can be canonical too if a declaration records the ordering

@@ -18,7 +18,7 @@ metaclass subscription building one interned class per base, and
 `LocalDimensionIndex` is a real subclass of `DimensionIndex` so that eve's
 `type[...]` validation is unaffected — see the main note.
 
-Last run: mypy 2.3.1 and pyright 1.1.414 (2026-10-01). Both report exactly the
+Last run: mypy 2.4.0 and pyright 1.1.414 (2026-10-01). Both report exactly the
 eleven `EXPECT-ERROR` lines and nothing else — mypy 12 diagnostics (two for the
 `Doubly` alias), pyright 11 — so every `must be ACCEPTED` line holds.
 """

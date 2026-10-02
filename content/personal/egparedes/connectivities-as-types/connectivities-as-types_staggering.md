@@ -242,6 +242,22 @@ Numbered as in the main note's *Open questions*.
    fingerprints a dimension's `kind` alongside its by-reference name, so an
    alignment keyword would follow the same pattern. Not in this stack.
 
+6. **`kind`'s remaining two jobs.** Once `LOCAL` leaves the enum, `kind` is a
+   layout sort key and a name for the scan axis. Layout is a property of the field,
+   not of the dimension, and that coupling is why dimension *names* currently
+   determine memory layout (F4); what `order_dimensions` actually wants is an
+   *order* — innermost to outermost, `I, J, K` for a box, `(CellDim, KDim)` for
+   ICON — which a per-grid dimension ordering would supply and which would retire
+   F4. "Vertical" is a role, not a geometry: in a Cartesian box the three axes are
+   alike, and what singles out `K` is that the numerics is sequential along it and
+   that it is not decomposed, properties of the program and of the decomposition.
+   [[personal/havogt/scan-redesign/scan-redesign|Scan redesign]] already takes the
+   scan range from the output domain rather than from `kind`, and SGRID describes
+   vertical staggering with the *same* `padding` syntax as horizontal, so it needs
+   no vertical kind at all. Every candidate
+   *addition* to `kind` — periodic, distributed, sequential, cell degree — likewise
+   belongs to the grid, the program or the range, so `kind` should shrink rather
+   than grow.
 7. **A cell `degree` on the axis.** Making the degree assignment static
    (`degree=0|1`) would let a coboundary be typed generically
    (`d⁰: Field[deg 0] -> Field[deg 1]`) and make the range invariant derivable

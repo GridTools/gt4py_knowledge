@@ -29,7 +29,7 @@ One declaration for offset, local dimension and provider key
 
 ADR 0029 (dimensions) · ADR 0030 (connectivities) · GridTools/gt4py#2917
 
-> **Appendix** to [Connectivities as types](connectivities-as-types), summarising that note as of commit `8292eff`. Every slide links the section it compresses and this deck adds no facts of its own, so where the two disagree the note wins. Rendering instructions are on the slide before this one.
+> **Appendix** to [Connectivities as types](connectivities-as-types), summarising the note on this branch; where the two disagree the note is authoritative. Every slide links the section it compresses, and the deck adds no facts of its own. Rendering instructions are on the slide before this one.
 
 ---
 
@@ -41,7 +41,7 @@ V2E    = FieldOffset("V2E", source=Edge, target=(Vertex, V2EDim))  # (N1) tag, (
 program(..., offset_provider={"V2E": table})                       # (N4) provider key
 ```
 
-Four independently authored strings. None checked against the others at declaration time. A fifth constraint is hidden: the Python *variable* name.
+Four independently authored strings, none checked against the others at declaration time. One of them is hidden: N2, the Python *variable* name the `FieldOffset` happens to be bound to.
 
 → [Four strings, one dict lookup](connectivities-as-types#four-strings-one-dict-lookup)
 
@@ -54,7 +54,7 @@ Four independently authored strings. None checked against the others at declarat
 | embedded | shift `a(V2E[1])` | N1 `FieldOffset.value` |
 | embedded | `neighbor_sum(axis=V2EDim)` | N3 `axis.value` |
 | compiled | shift | **N2 `foast.Name.id`** |
-| compiled | reduction | N3 `ListType.offset_type.value` |
+| compiled | reduction | **N2 `foast.Name.id`**, then N3 `ListType.offset_type.value` |
 | compiled | sparse field argument | N3 `dim.value` |
 
 Confirmed by execution: embedded and compiled key the *same* program on *different* strings.
@@ -106,7 +106,7 @@ That split is what lets DSL code be written, checked and compiled before any mes
 
 ---
 
-## Dimensions: four levels, one root
+## Dimensions: three new classes under one root
 
 ```
 DimensionIndex                            # the root; every annotation says this
@@ -180,7 +180,7 @@ ICON4Py: the script rewrites 4 files and reports 46 provider keys to decide.
 - **naming** — convergence with the chain proposals is still open
 - **the mesh proposal** — does a `Mesh` bind the typed declarations?
 - **`kind`** — four jobs in one enum; it should shrink, not grow
-- **`__eq__` vs "equality is `is`"** — asserted in one place, overridden in another
+- **the index origin of a bound table** — UGRID standardizes `start_index`; validating against a codomain range needs a target range the API has not got
 - **alignment** — `Staggered[D](i)` at `i − ½` is hard-coded; both conventions exist in production
 
 → [Open questions](connectivities-as-types#open-questions--follow-ups)

@@ -32,7 +32,7 @@ Keeps independently declared same-named dimensions interchangeable and
 avoids the importability rule. Rejected because it decouples the Python
 type's identity from the IR's, needs a registry plus `copyreg` plus a custom
 fingerprint deconstructor to paper over that gap, and cannot give a nested
-`V2E.Local` a unique name without further convention. See *Identity*.
+`V2E.Local` a unique name without further convention. See [[personal/egparedes/connectivities-as-types/connectivities-as-types#identity-is-the-qualified-python-name|Identity]].
 
 **Integer type parameters for `max_neighbors`** (`LocalDimensionIndex[F: int, M: int]`).
 Would need `Literal[6]` type arguments and `Final[F]` over a `TypeVar`;
@@ -50,8 +50,7 @@ fixed-arity meshes. Rejected as the *only* mode because it binds DSL source
 to one mesh family (`fvm_nabla_setup.py` sizes `V2E` from the atlas mesh) and
 because skip-value presence is configuration-dependent in ICON, so a static
 `min_neighbors` forces either duplicate classes or always-on skip handling.
-Declared counts stay available as a constraint; see Binding model.
-
+Declared counts stay available as a constraint; see [[personal/egparedes/connectivities-as-types/connectivities-as-types#binding-model|Binding model]].
 
 **Owner-less local axes as non-LOCAL dimensions.** Rejected: they would
 become domain dimensions with a range in every program domain and lose the

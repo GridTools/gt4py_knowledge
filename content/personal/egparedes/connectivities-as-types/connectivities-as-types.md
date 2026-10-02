@@ -3,7 +3,7 @@ title: "Connectivities as types: one declaration for offset, local dimension and
 author: egparedes
 tags: [type-system, type-checking, dimensions, local-dimensions, connectivities, offset-provider, unstructured, neighbor-sum, reduction, frontend, foast, gtir, embedded, gtfn, dace, nominal-types, dependent-types, metaclass, serialization, fingerprint, staggering, axis-dimensions, cw-complex, exterior-calculus, domain, dimension-kind, ugrid, sgrid, migration, adr, tech-debt, shared-local-dimensions, implemented]
 created: 2026-09-17
-updated: 2026-10-01
+updated: 2026-10-02
 status: draft
 ---
 
@@ -449,7 +449,7 @@ declared rather than derived, and the per-declaration axis-versus-mesh-location
 decision are in [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]]; its external
 corroboration is in [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|the conventions appendix]].
 
-Hence three levels, all *below* `DimensionIndex`, so that no
+Hence three new classes, all *below* `DimensionIndex`, so that no
 `type[DimensionIndex]` annotation in the tree changes and `LocalDimensionIndex`
 keeps its position:
 
@@ -640,9 +640,9 @@ tables assign different neighbors to the same domain element. The model:
   additionally requires all tables over one local dimension to agree on width
   and skip-value presence and — where a program is compiled — on the skip
   positions of the concrete tables, compared on the device the tables live on.
-  A key that names the *connectivity* instead of the declaration (`{V2E.tag:
-  table}`, which is the IR name of a declaration only when it shares another's
-  local dimension) is rejected with a pointer to `{V2E: table}`. A string key that is
+  A key that names a declaration by its own tag rather than by its
+  `offset_tag` (`{V2E.tag: table}`, which is the IR name of a declaration only when
+  it shares another's local dimension) is rejected with a pointer to `{V2E: table}`. A string key that is
   not a qualified name at all is remembered as such, so it costs one import
   attempt in total rather than one per call.
 - The class never holds data; the table crosses process boundaries as it did.
@@ -763,12 +763,22 @@ dimension, `as_offset(KDim, field)`.
 
 ## Alternatives considered
 
-Eleven alternatives are recorded in [[personal/egparedes/connectivities-as-types/connectivities-as-types_alternatives|the alternatives appendix]],
-and the six concerning the axis levels and `Staggered[D]` in
-[[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]]. The three a reviewer is most likely
-to raise: keep every concept and fix only which string wins; `(name, kind)` value
-equality with an interning registry; and static-only `max_neighbors` /
-`min_neighbors`.
+Eight alternatives are recorded in [[personal/egparedes/connectivities-as-types/connectivities-as-types_alternatives|the alternatives appendix]],
+two more on the spelling of `Local` in [[personal/egparedes/connectivities-as-types/connectivities-as-types_typing|the typing appendix]] §4, and the
+six concerning the axis levels and `Staggered[D]` in
+[[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]] §6. The three a reviewer is most likely to
+raise, with why each loses:
+
+- **Keep every concept and fix only which string wins.** It enforces the tangle
+  instead of removing it; no concept goes away.
+- **`(name, kind)` value equality with an interning registry.** It decouples the
+  Python type's identity from the IR's, so it needs a registry, a `copyreg` hook and
+  a custom fingerprint deconstructor to paper over the gap — and still cannot give a
+  nested `V2E.Local` a unique name.
+- **Static-only `max_neighbors` / `min_neighbors`.** Counts are not known statically:
+  `fvm_nabla_setup.py` sizes `V2E` from the atlas mesh and ICON's skip values are
+  configuration-dependent, so a static count forces duplicate classes or always-on
+  skip handling.
 
 ## Relation to gt4py ADRs
 
@@ -784,6 +794,10 @@ equality with an interning registry; and static-only `max_neighbors` /
   cache invalidates on module renames (Identity, rule 4).
 
 ## Open questions / follow-ups
+
+Items **1, 2, 5 and 6** are genuinely open and are what this note puts to a
+reviewer. Items 3, 4, 7, 8 and 9 are recorded as settled or deliberately out of
+scope, with the reasoning, so that a later reader does not reopen them.
 
 1. **Naming.** `NeighborConnectivity[Domain, Codomain]`, `Local`,
    `max_neighbors` / `min_neighbors`, and `offset_tag` for the IR name.
@@ -817,8 +831,11 @@ equality with an interning registry; and static-only `max_neighbors` /
 6. **`kind`'s remaining two jobs.** Once `LOCAL` leaves the enum, `kind` is a
    layout sort key and a name for the scan axis — properties of the field and of
    the program, not of the dimension. Every candidate *addition* belongs to the
-   grid, the program or the range, so `kind` should shrink rather than grow; see
-   [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]] §7.
+   grid, the program or the range, so `kind` should shrink rather than grow. The
+   argument is in [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|the staggering appendix]] §7, and SGRID's
+   treatment of the vertical is external evidence for it
+   ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions#d-external-evidence-for-open-question-6|conventions appendix]]
+   §4d).
 7. **A cell `degree` on the axis.** Left out because **nothing consumes it** until
    an exterior-calculus surface exists; a static `degree=0|1` is itself perfectly
    well defined and needs no periodicity. The ranges do *not* substitute for it: a
@@ -857,7 +874,7 @@ on its own, each based on the previous one:
 | C: GridTools/gt4py#2910 | `connectivities-as-types-6-class-keyed-providers` | `feat[next]!`: the tree and docs declare connectivities as classes; class-keyed offset providers with `check_offset_provider` at every entry point; `FieldOffset` removed; `as_offset(dim, field)` restricted to an `AnyCartesianAxisIndex`; `table_types` replaces `offset_provider_type`; migration script |
 | D: GridTools/gt4py#2912 | `connectivities-as-types-8-typed-positions` | `refactor[next]`: `MultiDimensionIndex` and typed embedded positions |
 
-The four PRs form GitHub stack GridTools/gt4py#2917. `NeighborTableType`,
+`NeighborTableType`,
 `TableTypes` and `ts.ShiftType` land in B, `table_types` in C; ADR 0029 and
 ADR 0030 are in A and B respectively.
 
@@ -893,7 +910,7 @@ left to ICON4Py.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_alternatives|Alternatives considered]]:
   the alternatives rejected on grounds other than the axis levels.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_slides|Slides: a walk-through deck]]:
-  a twelve-slide summary of this note for the design review, readable as a page and
+  a thirteen-slide summary of this note for the design review, readable as a page and
   renderable with `marp-cli`. It adds no facts and links the section each slide
   compresses.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_research|Tag and name constraints — full catalogue]]:
@@ -907,11 +924,6 @@ left to ICON4Py.
   local slots vs. incidences) on a small mesh, and a mapping of each concept
   onto this design — what is kept statically, what moves to the bind-time
   check, and what is given up.
-- [`typing_probe.py`](typing_probe.py): the mypy /
-  pyright probes behind the `Local` decisions (explicit nested class works,
-  also when only the local dimension differs; generated `ClassVar` form and
-  `Local[C]` reconciliation do not). Last run with mypy 2.3.1 and pyright
-  1.1.414.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|Alignment with the UGRID and SGRID conventions]]:
   an audit against the two community conventions for mesh topology and grid
   staggering — why UGRID's locations are cell degrees while SGRID's are per-axis
@@ -919,6 +931,11 @@ left to ICON4Py.
   ranges, and the enhancements that follow (a UGRID vocabulary for
   `LocationIndex`, recording the index origin of a bound table,
   deriving incidence signs from a recorded node ordering).
+- [`typing_probe.py`](typing_probe.py): the mypy /
+  pyright probes behind the `Local` decisions (explicit nested class works,
+  also when only the local dimension differs; generated `ClassVar` form and
+  `Local[C]` reconciliation do not). Last run with mypy 2.4.0 and pyright
+  1.1.414.
 - [`staggered_probe.py`](staggered_probe.py): the mypy / pyright probes behind
   [Cartesian axis dimensions](#cartesian-axis-dimensions) — `Staggered[Staggered[I]]`,
   `Staggered[V2E.Local]` and `Staggered[C]` are `[type-var]` errors, while

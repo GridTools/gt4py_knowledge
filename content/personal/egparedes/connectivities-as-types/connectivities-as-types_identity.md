@@ -30,11 +30,16 @@ status: draft
 3. **No registry.** Classes pickle by reference. One narrow `copyreg` hook
    exists, for `Staggered[D]`, whose bracketed qualname `save_global` cannot
    look up; it reduces to the base dimension and re-interns.
-4. **Fingerprints depend on qualified names.** Dimensions are fingerprinted by
-   reference (`Staggered[D]` through its base); a connectivity declaration
-   additionally by its domain, codomain, `Local` and counts, so a redefinition
-   under the same name does not reuse artifacts. Consequently the ADR 0023
-   build cache invalidates on module renames.
+4. **Fingerprints depend on qualified names, plus `kind`.** A dimension is
+   deconstructed as its by-reference name *and* its declaration-time `kind`, which
+   decides a field's layout order and the scan axis — so a dimension redefined under
+   the same name with another kind does *not* reuse artifacts. `Staggered[D]` goes
+   through its base and inherits this; its base cannot be flipped in place, since
+   the class is interned by base identity and its tag embeds the base tag. The axis
+   level (`CartesianAxisIndex` versus `DimensionIndex`) is deliberately *not*
+   fingerprinted: it changes what is accepted, never what is emitted. A connectivity
+   declaration is fingerprinted *additionally* by its domain, codomain, `Local` and
+   counts. Consequently the ADR 0023 build cache invalidates on module renames.
 5. **Codegen names need injective mangling.** `codegen_name(tag)` is a prefix
    escape — `_`→`_u`, `.`→`_d`, `[`→`_l`, `]`→`_r` — used by gtfn, DaCe, the
    roundtrip backend and the nanobind bindings; its inverse

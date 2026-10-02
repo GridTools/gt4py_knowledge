@@ -17,7 +17,7 @@ the stand-in rather than a finding.
 
 `StaticMultiLevelMapping` is a stand-in that stores the table on the class, which the
 design rejects (see "Data on the class" in the main note); only the probes at the
-end matter. Last run: mypy 2.3.1 and pyright 1.1.414 (2026-09-23; re-checked
+end matter. Last run: mypy 2.4.0 and pyright 1.1.414 (2026-09-23; re-checked
 2026-10-01).
 """
 
