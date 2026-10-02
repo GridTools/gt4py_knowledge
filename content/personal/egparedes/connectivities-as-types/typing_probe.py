@@ -6,13 +6,19 @@ mismatch on line `p1(Field[E, E_V2V.Local]())`; P1b rejects a mismatch in the lo
 dimension alone (`Field[V, E_V2V.Local]`), so the nested classes are distinct types
 in their own right; P2 rejects the generated `ClassVar` form
 as "not valid as a type"; P3 rejects each spelling where the other is expected.
-pyright additionally reports "Class definition for V_E2E depends on itself" on the
-string forward reference in the base subscription, which is why the proposal does
-not pass `Local` through the bases.
+pyright additionally reports "Class definition ... depends on itself" on the string
+forward reference in the base subscription — for both `V_E2E` and `E_V2V` — which is
+why the proposal does not pass `Local` through the bases.
+
+Unlike `staggered_probe.py`, this file is not error-clean and makes no "and nothing
+else" claim: mypy also reports `Returning Any from function declared to return "Self"
+[no-any-return]` in the `StaticMultiLevelMapping` scaffolding, which is an artifact of
+the stand-in rather than a finding.
 
 `StaticMultiLevelMapping` is a stand-in that stores the table on the class, which the
 design rejects (see "Data on the class" in the main note); only the probes at the
-end matter. Last run: mypy 2.3.1 and pyright 1.1.414 (2026-09-23).
+end matter. Last run: mypy 2.4.0 and pyright 1.1.414 (2026-09-23; re-checked
+2026-10-01).
 """
 
 from __future__ import annotations
