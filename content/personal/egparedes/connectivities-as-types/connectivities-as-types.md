@@ -850,13 +850,17 @@ with the reasoning, so that a later reader does not reopen them.
    `DimensionIndex` subclasses, so "a primary, non-local dimension" is still not a
    type. UGRID supplies the vocabulary and the degrees
    ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]] §4a). Out of scope here.
-9. **The index origin of a bound table.** `NeighborTableType` records no index
-   origin, while UGRID standardizes `start_index` ∈ {0, 1}. Validating entries
-   against a codomain *range* is not a one-line change: a codomain is a dimension
-   class and carries no range, `check_neighbor_table` receives only a declaration
-   and a table or type, and its type-only path (`table_types`) has no entries to
-   inspect. It would need a target range supplied at binding time and a
-   value-carrying table ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]] §4b).
+9. **The index origin of a bound table.** The stack assumes **0-based** tables and
+   says so nowhere: `NeighborTableType` carries no `start_index`, the loader performs
+   no rebase, and nothing validates entries against a codomain range. UGRID, by
+   contrast, standardizes `start_index` ∈ {0, 1}, and ICON4Py's tables come from
+   Fortran. So the open question is not whether to validate but whether to *record*
+   the assumption — a `start_index` field, or a documented 0-based requirement plus a
+   rebase in the loader. Validating against a codomain *range* is a separate and
+   larger change: a codomain is a dimension class and carries no range,
+   `check_neighbor_table` receives only a declaration and a table or type, and its
+   type-only path (`table_types`) has no entries to inspect. That would need a target
+   range supplied at binding time and a value-carrying table ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]] §4b).
 
 ## Implementation
 
@@ -869,7 +873,7 @@ on its own, each based on the previous one:
 
 | PR | Branch | What |
 | --- | --- | --- |
-| A: GridTools/gt4py#2899 | `connectivities-as-types-2-dimension-classes` | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0029); `codegen_name`; `CartesianAxisIndex` / `AnyCartesianAxisIndex` (both exported from `gtx`) and `Staggered[D: CartesianAxisIndex]`, with `__add__`/`__sub__` restricted to an axis statically and at runtime; interactive-`__main__` fallback; `NamedIndex` and the dimension half of the mypy plugin removed; mypy typing case `cartesian_axis_levels`; `ConstList` with `size=1` replaces the `_CONST_DIM` aliases; `AxisLiteral` drops `kind`; printing IR never imports (`resolve_loaded`); offset tag = local dimension tag = provider key in the tree |
+| A: GridTools/gt4py#2899 | `connectivities-as-types-2-dimension-classes` | `feat[next]`: a concrete dimension is a class identified by its qualified name (ADR 0029); `codegen_name`; `CartesianAxisIndex` / `AnyCartesianAxisIndex` (both exported from `gtx`) and `Staggered[D: CartesianAxisIndex]`, with `__add__`/`__sub__` restricted to an axis statically and at runtime; interactive-`__main__` fallback; `NamedIndex` and the dimension half of the mypy plugin removed; mypy typing case `cartesian_axis_levels`; `ConstList` with `size=1` replaces the `_CONST_DIM` aliases; `AxisLiteral` stores only its tag, deriving `kind` and `dim`; printing IR never imports (`resolve_loaded`); offset tag = local dimension tag = provider key in the tree |
 | B: GridTools/gt4py#2907 | `connectivities-as-types-3-neighbor-connectivity` | `feat[next]`: `NeighborConnectivity[Domain, Codomain]`, `LocalDimensionIndex` (and `DimensionKind.LOCAL` removed: a local's `kind` is `None`, localness comes from `common.is_local_dimension`, and `order_dimensions` ranks horizontal/local/vertical explicitly), `check_neighbor_table`, `local_dimension_of`, declaration fingerprinting; usable in the DSL; shared local dimensions, in the declarations and in the backends (`connectivity_key_over`, DaCe `local_dimension_size`); `NeighborTableType` and `ts.ShiftType`; pyright in the typing nox session, with `reportUnnecessaryTypeIgnoreComment: error` so a rejection that stops firing fails the run; ADR 0030 |
 | C: GridTools/gt4py#2910 | `connectivities-as-types-6-class-keyed-providers` | `feat[next]!`: the tree and docs declare connectivities as classes; class-keyed offset providers with `check_offset_provider` at every entry point; `FieldOffset` removed; `as_offset(dim, field)` restricted to an `AnyCartesianAxisIndex`; `table_types` replaces `offset_provider_type`; migration script |
 | D: GridTools/gt4py#2912 | `connectivities-as-types-8-typed-positions` | `refactor[next]`: `MultiDimensionIndex` and typed embedded positions |
