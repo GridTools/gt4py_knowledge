@@ -16,7 +16,7 @@ status: draft
 
 ## 1. The `__add__` self-type costs two suppressions
 
-The last row of [[personal/egparedes/connectivities-as-types/connectivities-as-types#cartesian-axis-dimensions|the core's *four checks become static* table]] — `C + 1` and `V2E.Local + 1` — needs `__add__` declared with `cls: type[AnyCartesianAxisIndex]`.
+The last row of [[personal/egparedes/connectivities-as-types/connectivities-as-types#cartesian-axis-dimensions|the core's table of checks that become static]] — `C + 1` and `V2E.Local + 1` — needs `__add__` declared with `cls: type[AnyCartesianAxisIndex]`.
 Both checkers bind that signature correctly at every call site and both reject it
 at the *definition* site, with different diagnostics — mypy `[misc]` ("self"
 parameter missing for a non-static method), pyright

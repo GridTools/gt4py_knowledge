@@ -795,9 +795,9 @@ raise, with why each loses:
 
 ## Open questions / follow-ups
 
-Items **1, 2, 5 and 6** are genuinely open and are what this note puts to a
-reviewer. Items 3, 4, 7, 8 and 9 are recorded as settled or deliberately out of
-scope, with the reasoning, so that a later reader does not reopen them.
+Items **1, 2, 5, 6 and 9** are genuinely open and are what this note puts to a
+reviewer. Items 3, 4, 7 and 8 are recorded as settled or deliberately out of scope,
+with the reasoning, so that a later reader does not reopen them.
 
 1. **Naming.** `NeighborConnectivity[Domain, Codomain]`, `Local`,
    `max_neighbors` / `min_neighbors`, and `offset_tag` for the IR name.

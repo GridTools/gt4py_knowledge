@@ -131,7 +131,8 @@ the two are independent.
 The class level also draws a distinction `kind` never did: `IDim` and `CellDim`
 are both `HORIZONTAL` and only the first is an axis. That is why the migration
 cannot be inferred from the source — whether a dimension is an axis or a mesh
-location is a decision per declaration (about ten in ICON4Py's `dimension.py`;
+location is a decision per declaration (four in ICON4Py's `dimension.py`, whose
+other 15 `*Dim` declarations are local and so do not raise the question;
 near-uniformly `CartesianAxisIndex` in `tests/next_tests`). The migration script
 decides per declaration, in this order:
 
@@ -251,13 +252,15 @@ Numbered as in the main note's *Open questions*.
    F4. "Vertical" is a role, not a geometry: in a Cartesian box the three axes are
    alike, and what singles out `K` is that the numerics is sequential along it and
    that it is not decomposed, properties of the program and of the decomposition.
-   [[personal/havogt/scan-redesign/scan-redesign|Scan redesign]] already takes the
-   scan range from the output domain rather than from `kind`, and SGRID describes
-   vertical staggering with the *same* `padding` syntax as horizontal, so it needs
-   no vertical kind at all. Every candidate
-   *addition* to `kind` — periodic, distributed, sequential, cell degree — likewise
+   [[personal/havogt/scan-redesign/scan-redesign|Scan redesign]] takes the scan range
+   from the output domain and never appeals to `kind` — it lists that implicit range
+   as P1, something to replace with an explicit one, but either way the range does
+   not come from the dimension. SGRID likewise describes vertical staggering with the
+   *same* `padding` syntax as horizontal, so it needs no vertical kind at all. Every
+   candidate *addition* to `kind` — periodic, distributed, sequential, cell degree —
    belongs to the grid, the program or the range, so `kind` should shrink rather
    than grow.
+
 7. **A cell `degree` on the axis.** Making the degree assignment static
    (`degree=0|1`) would let a coboundary be typed generically
    (`d⁰: Field[deg 0] -> Field[deg 1]`) and make the range invariant derivable
@@ -272,6 +275,6 @@ Numbered as in the main note's *Open questions*.
    needs the degree together with a periodicity and halo policy. Revisit if that
    surface lands — but note that a degree is *canonical* for a mesh
    location and only *declarational* for a Cartesian axis, so it belongs on the
-   `LocationIndex` of the next item rather than here
+   `LocationIndex` of the main note's item 8 rather than here
    ([[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]]
    §4a).

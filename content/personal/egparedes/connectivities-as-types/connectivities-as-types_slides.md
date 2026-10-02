@@ -27,9 +27,9 @@ npx -y @marp-team/marp-cli@4 --no-stdin \
 
 One declaration for offset, local dimension and provider key
 
-ADR 0029 (dimensions) · ADR 0030 (connectivities) · GridTools/gt4py#2917
+ADR 0029 (dimensions) · ADR 0030 (connectivities)
 
-> **Appendix** to [Connectivities as types](connectivities-as-types), summarising the note on this branch; where the two disagree the note is authoritative. Every slide links the section it compresses, and the deck adds no facts of its own. Rendering instructions are on the slide before this one.
+> **Appendix** to [Connectivities as types](connectivities-as-types), summarising the note it is published alongside; where the two disagree the note is authoritative. Every slide links the section it compresses, and the deck adds no facts of its own. Rendering instructions are on the slide before this one.
 
 ---
 
