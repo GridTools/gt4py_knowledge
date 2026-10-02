@@ -8,8 +8,8 @@ CartesianAxisIndex"), and nothing else. The `must be ACCEPTED` lines are the
 point of placing the two axis levels *below* `DimensionIndex` rather than above
 it: a staggered dimension stays a `DimensionIndex`, so no `type[DimensionIndex]`
 annotation in the gt4py tree widens, and `LocalDimensionIndex` keeps its
-position. P4 covers the fourth row of the note's "four checks become static"
-table — index arithmetic restricted to an axis by a self-type on
+position. P4 covers the fourth row of the note's table of checks that become
+static — index arithmetic restricted to an axis by a self-type on
 `DimensionMeta.__add__` — including the two definition-site suppressions that
 restriction costs (see the comment on `DimensionMeta`).
 

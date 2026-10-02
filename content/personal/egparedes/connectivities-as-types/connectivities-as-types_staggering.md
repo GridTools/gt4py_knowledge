@@ -252,9 +252,9 @@ Numbered as in the main note's *Open questions*.
    F4. "Vertical" is a role, not a geometry: in a Cartesian box the three axes are
    alike, and what singles out `K` is that the numerics is sequential along it and
    that it is not decomposed, properties of the program and of the decomposition.
-   [[personal/havogt/scan-redesign/scan-redesign|Scan redesign]] takes the scan range
-   from the output domain and never appeals to `kind` — it lists that implicit range
-   as P1, something to replace with an explicit one, but either way the range does
+   Today the scan range comes from the output domain and never from `kind`;
+   [[personal/havogt/scan-redesign/scan-redesign|Scan redesign]] lists that implicit
+   range as its P1 and replaces it with an explicit one — either way the range does
    not come from the dimension. SGRID likewise describes vertical staggering with the
    *same* `padding` syntax as horizontal, so it needs no vertical kind at all. Every
    candidate *addition* to `kind` — periodic, distributed, sequential, cell degree —
@@ -265,8 +265,7 @@ Numbered as in the main note's *Open questions*.
    (`degree=0|1`) would let a coboundary be typed generically
    (`d⁰: Field[deg 0] -> Field[deg 1]`) and make the range invariant derivable
    rather than declared. Left out for now because **nothing consumes it** until an
-   exterior-calculus surface exists (Proposal 1
-   of
+   exterior-calculus surface exists (Proposal 1 of
    [[personal/egparedes/discretization-independent-fd-syntax|the surface-syntax note]]).
    Absolute ranges do **not** determine the
    degree in general: a periodic axis gives both classes `[0, n)` under either
