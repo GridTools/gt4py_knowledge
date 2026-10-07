@@ -1,8 +1,8 @@
 """coordax probe for the mesh-field design-space note (research appendix §4.2).
 
-    uv run --no-project --with coordax --with "jax[cpu]" --with chex python coordax_probe.py
+    uv run --no-project --with "coordax==0.2.8" --with "jax[cpu]" --with chex python coordax_probe.py
 
-Last run: coordax 0.2.8 (source at neuralgcm/coordax 765bb88). Expected output:
+Last run: coordax 0.2.8 (source read at neuralgcm/coordax 765bb88). Expected output:
 
     gather dims: ('vertex', 'v2e_local')
     gathered values: [[10.0, 20.0, 30.0], [20.0, 30.0, 30.0]]

@@ -2,7 +2,7 @@
 
 Run from a directory that does not contain an `xarray/` source checkout:
 
-    uv run --no-project --with xarray --with numpy python xarray_probe.py
+    uv run --no-project --with "xarray==2026.9.0" --with numpy python xarray_probe.py
 
 Last run: xarray 2026.9.0. Expected output:
 

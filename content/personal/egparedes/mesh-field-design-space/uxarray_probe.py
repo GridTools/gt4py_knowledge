@@ -1,8 +1,8 @@
 """uxarray probe for the mesh-field design-space note (research appendix §4.3).
 
-    uv run --no-project --with uxarray python uxarray_probe.py
+    uv run --no-project --with "uxarray==2026.9.1" python uxarray_probe.py
 
-Last run: uxarray 2026.9.1 (source at UXARRAY/uxarray c05cb5a). Expected output:
+Last run: uxarray 2026.9.1 (source read at UXARRAY/uxarray c05cb5a). Expected output:
 
     connectivity dims: ('n_face', 'n_max_face_nodes') fill: -9223372036854775808
     shifted grids equal: False

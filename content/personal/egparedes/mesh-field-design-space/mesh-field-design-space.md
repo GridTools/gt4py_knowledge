@@ -119,11 +119,15 @@ Limits that shape every design (verified by probes elsewhere in this knowledge b
   **boundary regions**. A boundary region is a refinement of a global entity space,
   e.g. `{c : Cell<g> | refin_ctrl(c) = k}`: ICON's distance-to-lateral-boundary
   levels, the nudging zone, the model top and surface.
-- **The decomposition `π` of `g`**:
+- **The decomposition `π` of `g`**, defined for every distributed entity space `A`
+  (cells, edges, vertices alike):
   - ranks `r`, each with a local mesh `g_r`;
-  - injections `ι_r : Cell<g_r> → Cell<g>` (the global index);
-  - owned sets that partition `Cell<g>`;
-  - **halos**: the closure of the owned set under the relations, minus the owned set;
+  - injections `ι_r : A<g_r> → A<g>` (the global index);
+  - owned sets `owned_r(A) ⊆ A<g_r>` whose images partition `A<g>`;
+  - **halos of finite depth `d`**: the entities reachable from the owned sets in at
+    most `d` hops of the relations the programs use, minus the owned set. `d` is
+    configured, or derived from the reach of those relations. An unbounded closure
+    would be the whole connected mesh;
   - exchange patterns.
 
 | | Boundary regions | Halo lines |
@@ -135,9 +139,12 @@ Limits that shape every design (verified by probes elsewhere in this knowledge b
 | Decided by | the model author, in source | the backend or configuration, never the source |
 | Effect on the index space | restricts the global index space | extends the local index space |
 
-Boundary regions pulled back through `ι_r` are the same on every rank (`refin_ctrl`
-is a global property). A halo has no type-level meaning: it is a cache whose validity
-the implementation tracks.
+Boundary-region membership is consistent across ranks. A local entity belongs to a
+boundary region `R` exactly when its global image does (`R_r = ι_r⁻¹(R)`), so all
+replicas of one global entity agree on every rank. `refin_ctrl` is a global property.
+The local sets `R_r` themselves differ, since each lives in its own local index space.
+A halo has no type-level meaning: it is a cache whose validity the implementation
+tracks.
 
 ### Three causes of skip values, three owners
 
@@ -252,7 +259,10 @@ is also what the ICON Fortran granule path needs natively.
   levels cannot be named. The backend may extend a computation into the halo instead
   of exchanging, because halo values are caches by definition.
 - **Exchange points are explicit and depth-free**: `exchange(f)` means "make `f`
-  valid for its consumers". **Global reductions are explicit**: `global_sum(f)`.
+  valid for its consumers".
+- **Global reductions are explicit**: `global_sum(f, domain=d)` with `d ⊆ Owned`.
+  Each global entity is counted exactly once, and only the entities in `d` are read,
+  so `d` must not exceed what was written.
 
 ### Boundary regions and halo lines
 
@@ -283,9 +293,10 @@ def div(vn: Field[Dims[Edge, K], float], w: Field[Dims[Cell, Slot[C2E]], float])
 
 @local_program
 def step(vn: Field[Dims[Edge, K], float], w: Field[Dims[Cell, Slot[C2E]], float], out: Field[Dims[Cell, K], float]) -> float:
-    div(vn, w, out=out, domain=Owned(Cell) & ~LateralBoundary.levels(1, 4))   # never HALO_LEVEL_2
+    interior = Owned(Cell) & ~LateralBoundary.levels(1, 4)   # owned + semantic; never HALO_LEVEL_2
+    div(vn, w, out=out, domain=interior)
     exchange(out)                                       # no depth: the binding knows the reach of later reads
-    return global_sum(out)                              # explicit allreduce
+    return global_sum(out, domain=interior)             # explicit allreduce over what was written
 
 local = bind_local(tables, extents, owned=owned, global_index=gidx, regions={LateralBoundary: refin_ctrl})
 step(vn, w, out, binding=local)                         # halo depth: configured, or derived from reach
@@ -417,8 +428,9 @@ def div[M: Mesh2D](vn: Field[Dims[Edge[M], K], float]) -> Field[Dims[Face[M], K]
 
 grid = Icon.from_ugrid("icon_grid.nc", distribution=config.distribution)   # Auto(), or given by ICON
 vn = grid.zeros(Edge[Icon], K)                              # vn.mesh is grid (logical); storage is per rank
-div(vn, out=out, domain=grid.region(Face[Icon]) - LateralBoundary.levels(1, 4))
-mass = sum_over(out, axis=Face[Icon])                       # global by semantics; allreduce is inserted
+interior = grid.region(Face[Icon]) - LateralBoundary.levels(1, 4)
+div(vn, out=out, domain=interior)
+mass = sum_over(out, axis=Face[Icon], domain=interior)      # global by semantics; allreduce is inserted
 ```
 
 ### Dependent-typing reading
@@ -744,9 +756,19 @@ These hold whichever direction is chosen.
    recorded or rebased on load (as uxarray's loader does).
 8. **Some relations have tables known at compile time** (the scan redesign's
    vertical windows, Cartesian offsets). They need a binding mode of their own.
-9. **"Vertical" and "distributed" are facts of the decomposition, not dimension
-   kinds.** The vertical is never distributed, but its top and surface are semantic
-   boundaries.
+9. **Verticality belongs to the logical mesh, distribution to the decomposition,
+   and neither is a dimension kind.**
+   - *Which* axis is vertical, with its orientation, top and surface, is geometry of
+     the logical mesh, declared by the schema or the axis. CF records it on the
+     coordinate (`axis="Z"`, `positive`). The top and surface are semantic boundary
+     regions.
+   - *Whether* an axis is distributed is decided by the decomposition. In practice
+     the vertical never is, which keeps vertical scans and reductions free of
+     communication.
+   - What remains of `DimensionKind` (layout order, the scan axis) belongs to the
+     field and the program, as the
+     [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|connectivities staggering appendix]]
+     §7 argues.
 10. **Dimension genericity (`TypeVar`/`TypeVarTuple` over dimensions) is a
     prerequisite** for all three. Without it, staggering costs 14 operators where 4
     generic ones suffice
