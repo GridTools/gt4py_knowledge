@@ -67,8 +67,12 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
   - 8 tables are read from the grid file (1-based, converted to 0-based); the multi-hop ones are derived.
   - Neighbour order is semantic: `icon_edge_order` exists because `compute_e_flx_avg` depends on it.
 - **Zones and layout**:
-  - `Zone` = `LATERAL_BOUNDARY..LEVEL_8`, `NUDGING`, `INTERIOR`, `HALO`, `HALO_LEVEL_2`, `LOCAL`.
-    These are ports of ICON's `rl_start`/`rl_end` and `refin_ctrl`.
+  - `Zone` = `END`, `INTERIOR`, `HALO`, `HALO_LEVEL_2`, `LOCAL`,
+    `LATERAL_BOUNDARY..LEVEL_8` (edges; cells and vertices stop at `LEVEL_4`),
+    `NUDGING`, `NUDGING_LEVEL_2` (edges only). These are ports of ICON's
+    `rl_start`/`rl_end`.
+  - `refin_ctrl` is the row distance from the lateral boundary, with per-kind
+    thresholds: cells ≤ 4, edges ≤ 9, vertices ≤ 4.
   - The local memory layout is `|lateral-boundary|nudging|interior|halo1|halo2|`.
   - LAM halos are not contiguous.
   - **One vocabulary covers both semantic boundary zones and decomposition zones.**
@@ -132,7 +136,7 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
 ### 4.3 uxarray
 
 - **The mesh is `Grid`** (`uxarray/grid/grid.py:116`). It wraps a UGRID-encoded
-  `xr.Dataset` with lazily derived connectivities (12 properties named by entity
+  `xr.Dataset` with lazily derived connectivities (9 properties named by entity
   pair), geometry, and subsetting with `inverse_indices`. Readers exist for UGRID,
   MPAS, ICON, ESMF, Exodus, SCRIP, FESOM2 and HEALPix.
 - **A fixed vocabulary removes the string-agreement problem**
@@ -142,10 +146,15 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
     `edge_node_connectivity` and `edge_face_connectivity` share. That conflates two
     different slot spaces.
   - A field's location is inferred from its dimension name (`data_mapping`).
-- **Loader normalization**: on load, `_FillValue` becomes one sentinel
-  (`INT_FILL_VALUE`, the minimum of `intp`) and `start_index` is rebased to 0
-  (`uxarray/io/_ugrid.py:206-252`). `Grid.validate()` is opt-in and never called
-  internally.
+- **Loader normalization, partial** (`uxarray/io/_ugrid.py:206-252`):
+  - Origin and fill are normalized only when a connectivity needs a dtype or fill
+    conversion. Then `_FillValue` becomes one sentinel (`INT_FILL_VALUE`, the
+    minimum of `intp`) and `start_index` is subtracted.
+  - A table already in `intp` with that sentinel is left unchanged, even with
+    `start_index=1`.
+  - Without a `start_index` attribute, the loader subtracts the table's minimum
+    entry instead of assuming UGRID's default of 0.
+  - `Grid.validate()` is opt-in and never called internally.
 - **Ragged degree**: topological aggregations partition faces by their true node
   count (`uxarray/core/aggregation.py`, `get_face_node_partitions`). They pick the
   connectivity from the pair of locations: `topological_mean(destination="face")`
@@ -168,7 +177,7 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
 | | xarray | coordax | uxarray | gt4py (connectivities as types) |
 | --- | --- | --- | --- | --- |
 | Dimension identity | hashable (usually `str`) | `str` | fixed UGRID names | nominal class, qualified name |
-| Connectivity | data; the result takes the table's dimensions | data, via `cmap` | 12 lazily derived grid properties | declaration class plus a table bound per call |
+| Connectivity | data; the result takes the table's dimensions | data, via `cmap` | 9 lazily derived grid properties | declaration class plus a table bound per call |
 | Local dimension owned by | the table value | the table value | the connectivity (fixed name), except `two` | the declaration (`V2E.Local`) |
 | Skip values | none | none | one fill sentinel; true ragged degree in aggregations | `skip_value`, `max_neighbors`/`min_neighbors` |
 | Mesh object | none | none (a `Coordinate` could act as one) | `Grid` | none (the provider dict) |

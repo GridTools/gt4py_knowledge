@@ -18,9 +18,10 @@ status: draft
 > - **B — Logical mesh object plus a runtime decomposition.** *Global semantics*. A
 >   field is a pair (logical mesh, data). Boundary regions belong to the mesh; halos
 >   belong to a separate `Distribution` that source code cannot name.
-> - **C — Located fields over cell complexes.** *Global semantics*. A field is typed
->   by its cell class, neighborhoods are the complex's incidences, and boundaries are
->   the boundary subcomplex.
+> - **C — Cochain-typed fields over cell complexes.** *Global semantics*. A field is
+>   typed by its cochain space: primal or dual side, a degree, and an integrated or
+>   sampled representation. The operators are the coboundary and the Hodge star.
+>   Boundary conditions are typed operations on the boundary subcomplex.
 >
 > All three separate the **logical mesh** (topology, geometry, boundary regions:
 > semantic) from the **decomposition** (ownership, halo lines: implementation). They
@@ -87,14 +88,18 @@ Mesh g       = { entity counts; relations r : (v : A<g>) → Vec<B<g>, deg_r(v)>
 A<g>         = Fin<g.n_A>                           -- an entity index space is a type family over g
 Field<g,L,T> = L<g> → T                             -- a function on one location of one mesh
 Slot<g,r,v>  = Fin<deg_r(v)>                        -- a neighbor slot depends on g, r and v (Π)
-Incid<g,r>   = Σ v : A<g>. Fin<deg_r(v)>           -- an incidence: a flattened sparse position (Σ)
+SlotPos<g,r> = Σ v : A<g>. Fin<deg_r(v)>           -- a slot position: the flattened, CSR-like sparse space (Σ)
+Incid<g,r>   = Σ v : A<g>. { e : B<g> | e ∈ r(v) }  -- an incidence (§4): a (v, e) pair, the COO-like addressing
 program      : (g : Mesh) → Field<g,E,T> → Field<g,V,T>   -- Π over the mesh
 ```
 
+The enumeration (§6) is the bijection between slot positions and incidences.
+
 ### What Python can keep
 
-Python types cannot mention values. Each fact about `g` must therefore be assigned
-to a stage:
+Python types can mention literal constants (`Literal[3]`) but never runtime values,
+and they have no type-level arithmetic: neither `g.n_A` nor `degree(g, v)` can
+appear in a type. Each fact about `g` must therefore be assigned to a stage:
 
 1. **Static**: the type checker sees it. Only names and nominal identity.
 2. **Compile time**: the frontend specializes on it, for example counts, dtype and
@@ -104,12 +109,14 @@ to a stage:
 
 Limits that shape every design (verified by probes elsewhere in this knowledge base):
 - nominal classes are the only usable brand;
-- there are no integer type parameters;
+- integer type arguments are limited to `Literal` constants, with no arithmetic on
+  them;
 - there are no type-level functions, so changing a dimension inside `Dims[...]`
   needs one overload per rank and position (bounded code generation);
 - `TypeVarTuple` is unbounded, and only one may appear per tuple;
-- `M.Cell` is not valid in a type when `M` is a `TypeVar`. Families that are generic
-  over a mesh must therefore use subscription (`Face[M]`), not nested attributes.
+- `M.Cell` with `M` a `TypeVar` yields no usable type: mypy rejects it, and pyright
+  silently degrades it to `Unknown`. Families that are generic over a mesh must
+  therefore use subscription (`Cell[M]`), not nested attributes.
 
 ## Logical mesh and decomposition
 
@@ -127,7 +134,9 @@ Limits that shape every design (verified by probes elsewhere in this knowledge b
   - **halos of finite depth `d`**: the entities reachable from the owned sets in at
     most `d` hops of the relations the programs use, minus the owned set. `d` is
     configured, or derived from the reach of those relations. An unbounded closure
-    would be the whole connected mesh;
+    would be the whole connected mesh. Halos imported from a host (B's *given*
+    mode) need not be such a closure: ICON4Py's second cell halo line completes the
+    dual-cell hexagon around cut vertices;
   - exchange patterns.
 
 | | Boundary regions | Halo lines |
@@ -154,7 +163,7 @@ The three causes are those identified by
 | Cause | Owner | Visible in source |
 | --- | --- | --- |
 | ragged arity (pentagons) | the relation's table type: `max_neighbors`, presence of skip values | yes |
-| boundary partiality: a missing neighbor at the LAM lateral boundary | the logical mesh: a **partial relation** (declared, or taken from the bound table) | yes: reads must be guarded by a boundary condition or a domain that excludes the boundary |
+| boundary partiality: a fixed-width table slot with no neighbor at the LAM lateral boundary (`E2C` on a boundary edge), or a stencil that reaches outside the domain (`C2E2C` next to the boundary) | the logical mesh: a **partial relation** (declared, or taken from the bound table). The incidence itself is complete: a boundary edge simply has one cell | yes: reads must be guarded by a boundary condition or a domain that excludes the boundary |
 | truncation at the edge of the halo | the decomposition | never observable |
 
 ### Global and local semantics
@@ -172,11 +181,20 @@ The three causes are those identified by
   (`DMGlobalToLocal`), and gt4py and ICON4Py today.
 
 **Requirement on backends under either semantics.**
-- Per-entity results must be **bitwise identical under any decomposition**.
-  Neighbor reductions use the table order on every rank, so recomputing a value in
-  the halo equals exchanging it.
-- Only reductions over a distributed dimension (global sums), whose summation order
-  depends on the partition, may differ, and only by rounding.
+- Per-entity results must be **bitwise identical under any decomposition**. This
+  rests on two premises:
+  - neighbor reductions use the table order on every rank;
+  - generated code gives every entity the same instruction sequence, regardless of
+    its position or of the compute-domain extent (no remainder-loop or
+    FMA-contraction differences).
+
+  Recomputing a value in the halo then equals exchanging it.
+- **Reductions over a distributed dimension must themselves be reproducible**:
+  independent of the partition, e.g. by a fixed reduction tree over global indices,
+  or by exact or binned summation. Otherwise their rounding differences propagate to
+  every result that depends on them, including control decisions (`mass > 0`). In
+  that case bitwise identity holds only for computations that do not depend on such
+  a reduction.
 
 ### Design axes
 
@@ -184,8 +202,8 @@ The three causes are those identified by
 | --- | --- |
 | Semantics of a program | local (A) / global (B, C) |
 | Where the mesh lives (§7) | parameter of the call plus a runtime brand (A) / carried by every field (B) / inherited, plus mesh *kind* at compile time (C) |
-| User vocabulary | index spaces and relations (A) / mesh schema, entities and regions (B) / locations and operators (C) |
-| Local dimensions | dependent slots and incidence spaces (A, B) / hidden behind incidences (C) |
+| User vocabulary | index spaces and relations (A) / mesh schema, entities and regions (B) / cochain spaces and operators (C) |
+| Local dimensions | dependent slots `Slot[R, P]` and slot-flattened spaces (A, B) / hidden behind cochain operators (C) |
 | Boundary regions | declared on entity spaces (A) / owned by the mesh (B) / boundary subcomplex (C) |
 
 ## Proposal A — Typed relations over a rank-local mesh
@@ -210,35 +228,52 @@ is also what the ICON Fortran granule path needs natively.
   - `Entity`: unstructured locations.
   - `Axis`: Cartesian, with index arithmetic. `Staggered[D]` is its involution
     (cell centres ↔ faces).
-  - `Slot[R]`: the dependent neighbor-slot space of relation `R`.
+  - `Slot[R, P]`: the dependent neighbor-slot space of relation `R` under parent `P`
+    (the root dimension, or another slot).
   - `Label`: finite spaces with no topology, such as tracers, ensemble members or
     `LsqUnk`.
 
   Identity is the qualified Python name, as in connectivities as types.
 - **Relations**: `class C2E(Relation[Cell, Edge])` is the static half of a table's
-  type. Relations form an **algebra**:
-  - transpose `C2E.T`;
-  - composition `C2E @ E2C`;
-  - reflexive closure, for the "O" variants.
+  type. A relation carries two things that must not be conflated:
+  - **Reach**: a footprint algebra with set semantics (transpose, composition,
+    union, reflexive closure), used for halo depth and domain inference. A term's
+    reach is known statically.
+  - **An ordered stencil**: the materialized table, which fixes origin exclusion,
+    deduplication and neighbor order. ICON's `C2E2C` lists a cell's three
+    edge-neighbors without the cell itself, `C2E2CO` prepends it, and ICON4Py
+    permutes some neighbors explicitly. The path composition `C2E @ E2C` would list
+    the cell itself three times.
 
-  A term's *reach* (its number of incidence hops) is known statically. A relation
-  is **partial** when some rows have no valid neighbor because of the domain
-  boundary, e.g. `E2C` on a LAM mesh. Partiality is a fact of the bound table,
-  declared or taken from the binding like the counts, and it forces a guard on every
-  read.
-- **Chains and reduction order**: slot spaces record their parent (the dependency
-  forest of [[personal/havogt/dependent-local-dimensions/dependent-local-dimensions|dependent local dimensions]]).
-  Only a leaf may be reduced, so `ef(V2E)(E2V)` is well typed and a wrong reduction
-  order is a type error. `Slot[R]` is spelled by subscription so that code generic
-  over relations can name it.
-- **Incidence spaces are Σ types**: `Pairs[C2E]` is the flattened (cell,
-  edge-of-cell) space, ICON's `CE`. A sparse field has two isomorphic addressings:
-  - `Dims[Cell, Slot[C2E]]`: padded, CSR-like;
-  - `Dims[Pairs[C2E]]`: flattened, COO-like.
+  A named relation is therefore a table *annotated* with its footprint term, e.g.
+  `class C2E2C(Relation[Cell, Cell], reach=C2E @ E2C)`. Derived tables (transposes,
+  compositions) need an explicit ordering rule.
 
-  The bijection between them is derived from the table. Relations into a flattened
-  space (`C2CE`) are therefore derived, and agree with `C2E`'s slot order by
-  construction.
+  A relation is **partial** when some rows have no neighbor in a fixed-width slot
+  because of the domain boundary, e.g. `E2C` on a LAM mesh. Partiality is a fact of
+  the bound table, declared or taken from the binding like the counts, and it forces
+  a guard on every read.
+- **Chains and reduction order**: slot spaces name their parent, as in the
+  dependency forest of [[personal/havogt/dependent-local-dimensions/dependent-local-dimensions|dependent local dimensions]]
+  (`Local[C, P]` there).
+  - `vf(V2V)` has `Slot[V2V, Vertex]`.
+  - `vf(V2V)(V2V)` has `Slot[V2V, Vertex]` and `Slot[V2V, Slot[V2V, Vertex]]`,
+    because the earlier hop is re-parented under the new one.
+  - Only a leaf may be reduced, so `ef(V2E)(E2V)` is well typed and a wrong
+    reduction order is a type error.
+  - Re-parenting is a type-level substitution, expressed by bounded overloads per
+    forest shape (that note's prototype verifies depth 2).
+  - `Slot[R, P]` is spelled by subscription so that code generic over relations can
+    name it.
+- **Slot-flattened spaces are Σ types**: `Pairs[C2E]` = Σ c. Fin(deg c) is the
+  flattened (cell, slot) space, ICON's `CE`. A sparse field has two isomorphic
+  addressings:
+  - `Dims[Cell, Slot[C2E, Cell]]`: padded, CSR-like;
+  - `Dims[Pairs[C2E]]`: flattened.
+
+  The enumeration (§6) maps both to the incidence pairs. The bijection is derived
+  from the table, so relations into a flattened space (`C2CE`) are derived too, and
+  agree with `C2E`'s slot order by construction.
 - **The local binding** `bind_local(...)` holds:
   - local tables, including halo rows;
   - local extents;
@@ -251,18 +286,25 @@ is also what the ICON Fortran granule path needs natively.
   the binding itself.
 - **Halo depth is derived, not written.** The binding computes the depth a program
   needs from the reach of the relation terms it uses; configuration may override it.
-- **Halo validity is tracked state.** Each field records how far beyond `Owned` it is
-  valid. Reading through a relation whose reach exceeds that is an error, or
-  triggers an exchange under an `auto` policy. A typestate can make "owned-valid" vs
-  "halo-valid" static; the depth itself cannot be.
+- **Validity is tracked as a region per field, not as a depth.**
+  - A write on domain `D` makes the written entries valid; other entries keep
+    whatever validity they had.
+  - `exchange` makes halo replicas valid where their owners are valid. It only
+    copies, so owned entries that were never written stay invalid.
+  - A read through relation `R` on domain `D'` requires `R(D')` ⊆ valid. A violation
+    is an error, or triggers an exchange under an `auto` policy.
+  - A single depth cannot describe partial writes such as `Owned ∩ interior`. A
+    typestate can mark owned-valid vs halo-valid statically; the regions cannot be
+    static.
 - **Domains in source** are `Owned(Cell)` combined with semantic regions. Halo
   levels cannot be named. The backend may extend a computation into the halo instead
   of exchanging, because halo values are caches by definition.
 - **Exchange points are explicit and depth-free**: `exchange(f)` means "make `f`
   valid for its consumers".
-- **Global reductions are explicit**: `global_sum(f, domain=d)` with `d ⊆ Owned`.
-  Each global entity is counted exactly once, and only the entities in `d` are read,
-  so `d` must not exceed what was written.
+- **Global reductions are explicit and program-level only**: `global_sum(f, domain=d)`
+  with `d ⊆ Owned`. Each global entity is counted exactly once, and only the
+  entities in `d` are read, so `d` must not exceed what was written. Field operators
+  never reduce over a distributed dimension (layering rule 2).
 
 ### Boundary regions and halo lines
 
@@ -282,17 +324,17 @@ class K(Axis): ...                                      # Staggered[K]: the half
 
 class C2E(Relation[Cell, Edge], max_neighbors=3): ...
 class E2C(Relation[Edge, Cell], max_neighbors=2): ...   # partial on a LAM mesh: boundary edges have one cell
-C2E2C = C2E @ E2C                                       # a term: its reach (2 hops) is known statically
-CE = Pairs[C2E]                                         # Σ c. Fin(deg c): the flattened cell-edge space
+class C2E2C(Relation[Cell, Cell], max_neighbors=3, reach=C2E @ E2C): ...   # table pins order, excludes the cell itself
+CE = Pairs[C2E]                                         # Σ c. Fin(deg c): the flattened cell-slot space
 
 class LateralBoundary(BoundaryRegion[Cell]): ...        # semantic: a refinement of the logical Cell space
 
 @field_operator
-def div(vn: Field[Dims[Edge, K], float], w: Field[Dims[Cell, Slot[C2E]], float]) -> Field[Dims[Cell, K], float]:
-    return neighbor_sum(vn(C2E) * w, axis=Slot[C2E])
+def div(vn: Field[Dims[Edge, K], float], w: Field[Dims[Cell, Slot[C2E, Cell]], float]) -> Field[Dims[Cell, K], float]:
+    return neighbor_sum(vn(C2E) * w, axis=Slot[C2E, Cell])
 
 @local_program
-def step(vn: Field[Dims[Edge, K], float], w: Field[Dims[Cell, Slot[C2E]], float], out: Field[Dims[Cell, K], float]) -> float:
+def step(vn: Field[Dims[Edge, K], float], w: Field[Dims[Cell, Slot[C2E, Cell]], float], out: Field[Dims[Cell, K], float]) -> float:
     interior = Owned(Cell) & ~LateralBoundary.levels(1, 4)   # owned + semantic; never HALO_LEVEL_2
     div(vn, w, out=out, domain=interior)
     exchange(out)                                       # no depth: the binding knows the reach of later reads
@@ -320,11 +362,12 @@ step(vn, w, out, binding=local)                         # halo depth: configured
   nominal dimensions with qualified-name identity, `Staggered[D]`, the split between
   a declaration and its table, the boundary check.
 - **Changes**:
-  - `V2E.Local` becomes `Slot[R]` (friendlier to generics, at the cost of interning);
+  - `V2E.Local` becomes `Slot[R, P]` (it carries the parent the forest needs, and is
+    friendlier to generics, at the cost of interning);
   - the owner/sharer rules for local dimensions become `Pairs[R]`;
   - the `offset_provider` dict becomes a `Binding` object.
-- **Adopts** the forest of dependent local dimensions and the halo-validity dataflow
-  of the mesh proposal.
+- **Adopts** the forest of dependent local dimensions. **Generalizes** the mesh
+  proposal's per-field valid-depth to valid regions.
 - **Ecosystem**: closest to xarray and coordax (dimensions plus data, topology as
   data) and to Atlas, PETSc and MPI practice.
 
@@ -363,16 +406,17 @@ cheaper, and splits global reductions.
 
 ### Core concepts
 
-- **Schema**: entity families are generic over a schema class, using the UGRID
-  vocabulary: `Face[M]`, `Edge[M]`, `Node[M]`. `Face[Icon]` materializes an ordinary
+- **Schema**: entity families are generic over a schema class: `Cell[M]`, `Edge[M]`,
+  `Vertex[M]` (UGRID's face, edge and node). These are the same names A and C use,
+  so nothing is renamed between levels. `Cell[Icon]` materializes an ordinary
   nominal entity class, interned like `Staggered[D]`. A schema brands its entities
-  statically, so `Face[Icon]` and `Face[RadiationGrid]` are different types.
+  statically, so `Cell[Icon]` and `Cell[RadiationGrid]` are different types.
   Schemas also declare axes (vertical levels, with their staggered half levels),
   relations and boundary-region kinds.
 - **Roles**: `class Parent(Icon)` and `class Child(Icon)` separate several meshes of
   one schema in one process (ICON's nests and its reduced radiation grid). A
   transfer between meshes is a relation between entities of different roles:
-  `Relation[Face[Child], Face[Parent]]`.
+  `Relation[Cell[Child], Cell[Parent]]`.
 - **The mesh instance is the logical mesh**: CF's domain construct, made executable.
   It is validated once at construction (§8) and immutable. It holds:
   - global relations, which need never be materialized globally, with their neighbor
@@ -399,7 +443,7 @@ cheaper, and splits global reductions.
   the source. Storage is per rank; type and meaning are global. A program finds its
   mesh from its field arguments and requires exactly one instance per role.
 - **Domains in source** are semantic regions only, e.g.
-  `grid.region(Face[Icon]) - LateralBoundary.levels(1, 4)`. There is no
+  `grid.region(Cell[Icon]) - LateralBoundary.levels(1, 4)`. There is no
   `INTERIOR`/`HALO` vocabulary. Reductions over entity dimensions are global by
   definition.
 - **The compile key** is the mesh *signature* (schema, table types, region layout)
@@ -420,17 +464,17 @@ translation layer.
 ### Sketch
 
 ```python
-class Icon(Mesh2D): ...                                     # schema: Face/Edge/Node[Icon] are its entity spaces
-class C2E(Relation[Face[Icon], Edge[Icon]], max_neighbors=3): ...
-class LateralBoundary(BoundaryRegion[Face[Icon]]): ...
+class Icon(Mesh2D): ...                                     # schema: Cell/Edge/Vertex[Icon] are its entity spaces
+class C2E(Relation[Cell[Icon], Edge[Icon]], max_neighbors=3): ...
+class LateralBoundary(BoundaryRegion[Cell[Icon]]): ...
 
-def div[M: Mesh2D](vn: Field[Dims[Edge[M], K], float]) -> Field[Dims[Face[M], K], float]: ...
+def div[M: Mesh2D](vn: Field[Dims[Edge[M], K], float]) -> Field[Dims[Cell[M], K], float]: ...
 
 grid = Icon.from_ugrid("icon_grid.nc", distribution=config.distribution)   # Auto(), or given by ICON
 vn = grid.zeros(Edge[Icon], K)                              # vn.mesh is grid (logical); storage is per rank
-interior = grid.region(Face[Icon]) - LateralBoundary.levels(1, 4)
+interior = grid.region(Cell[Icon]) - LateralBoundary.levels(1, 4)
 div(vn, out=out, domain=interior)
-mass = sum_over(out, axis=Face[Icon], domain=interior)      # global by semantics; allreduce is inserted
+mass = sum_over(out, axis=Cell[Icon], domain=interior)      # global by semantics; allreduce is inserted
 ```
 
 ### Dependent-typing reading
@@ -480,7 +524,7 @@ mass = sum_over(out, axis=Face[Icon], domain=interior)      # global by semantic
 - Every field needs a mesh, so a `CartesianGrid` schema becomes mandatory even for
   test fields.
 
-## Proposal C — Located fields over cell complexes
+## Proposal C — Cochain-typed fields over cell complexes
 
 > **Semantics: global.** Programs express operators on the logical complex. The
 > decomposition is invisible in source and handled as in B: a runtime
@@ -489,44 +533,89 @@ mass = sum_over(out, axis=Face[Icon], domain=interior)      # global by semantic
 ### Thesis
 
 Every mesh is a cell complex. An unstructured horizontal complex is combined with
-1-D axis complexes; a structured grid is a product of axes. A field's type is its
-**location**, a cell class of that complex. Neighborhoods are the complex's signed
-incidences, which the mesh realizes. Users write operators between locations; named
-relations are the escape hatch. This is Proposal 3 of
+1-D axis complexes; a structured grid is a product of axes.
+
+A field's type is a **cochain space**, not a bare location. It is a side (the primal
+complex or its dual) with a degree, plus a **value representation**: integrated, or
+sampled. Operators are the coboundary `d` (topology) and the Hodge star `star`
+(metric), both supplied by the mesh. Named relations are the escape hatch.
+
+This is Proposal 3 of
 [[personal/egparedes/discretization-independent-fd-syntax|the FD-syntax note]] made
 the type model. Its distinctive content is the user surface and the boundary model;
 it reuses B's split between logical mesh and distribution.
 
 ### Core concepts
 
-- **Locations** come from two sources:
-  - unstructured classes that carry a degree: `Vertex` (0), `Edge` (1), `Cell` (2)
-    (UGRID's node, edge, face);
-  - per-axis classes `D` and `Staggered[D]` (SGRID's bit vectors).
-
-  Products are written `At[Edge, Half]`. Dimension tuples become derived layout. On a
-  structured 2-D grid an `Edge` cochain is a **pair** of fields, `(I½, J)` and
-  `(I, J½)`; that is the exterior-calculus answer, and the reason the FD-syntax note
-  keeps `EDGE_N`/`EDGE_T` apart.
-- **Canonical incidences come with the complex**, including orientation signs. The
-  mesh records the enumeration and orientation; that needs UGRID's anticlockwise face
-  order plus each edge's own node order.
+- **Primal and dual complex.**
+  - The **primal** complex is the mesh as stored: `Vertex` (0), `Edge` (1), `Cell` (2),
+    which are UGRID's node, edge and face.
+  - Its **dual** has a dual k-cell for every primal (2−k)-cell: a dual vertex at each
+    cell centre, a dual edge crossing each primal edge, a dual cell around each
+    primal vertex.
+  - Assumed: the horizontal complex is an oriented 2-manifold with boundary, whose
+    orientation the mesh records. That needs UGRID's anticlockwise face order plus
+    each edge's own node order.
+- **Cochain spaces** are `Primal[k]` and `Dual[k]`, combined with axis classes as in
+  `At[Dual[1], Full]`.
+  - The storage location is *derived*: `Primal[k]` lives at primal k-cells, `Dual[k]`
+    at primal (2−k)-cells. So `Dual[0]` lives at `Cell`, `Dual[1]` at `Edge`, and
+    `Dual[2]` at `Vertex`.
+  - Two fields stored at `Edge` can therefore have different types.
+  - `Dual[1]` is notation. Python spells the degree as a `Literal`
+    (`Dual[Literal[1]]`) or as one class per side and degree. Checked with mypy
+    2.4.0 and pyright 1.1.414:
+    - overloads of `d` infer `Dual[Literal[0]] → Dual[Literal[1]] → Dual[Literal[2]]`;
+    - both checkers reject a `Primal[Literal[1]]` field where a `Dual[Literal[1]]`
+      one is expected.
+  - On a structured product complex, every degree also splits by per-axis bits. For
+    example, a degree-1 cochain is a pair of fields, `(I½, J)` and `(I, J½)`. This
+    direction split is orthogonal to the primal/dual split: `Primal[1]` and `Dual[1]`
+    are each such a pair.
+- **Value representation.**
+  - **Integrated** values are the cochain proper: integrals over cells, which is what
+    `d` acts on.
+  - **Sampled** values (`Sampled[Dual[1]]`) are point values or cell means, which is
+    what pointwise physics uses.
+  - `integrate` and `sample` convert between the two by multiplying or dividing by
+    the cell measure. For degree 0 they coincide.
 - **Operators**:
-  - `d`, the coboundary: pure topology, typed location to location;
-  - `star`, the Hodge star: metric, supplied by the mesh;
-  - reductions over incidences, `sum_over(vn, Edge → Cell)` (the same shape as
+  - `d : Primal[k] → Primal[k+1]` and `d : Dual[k] → Dual[k+1]`: signed incidence,
+    pure topology;
+  - `star : Primal[k] → Dual[2−k]` and back: metric ratios supplied by the mesh;
+  - `integrate` / `sample`: metric;
+  - reductions over named incidences, `sum_over(vn, Edge → Cell)` (the same shape as
     uxarray's `topological_mean(destination="face")`);
-  - reconstructions `to[Loc]`.
+  - reconstructions `to[...]`.
 
-  Sparse fields live on incidences (`Field[At[Incidence[Cell, Edge]]]`, the Σ type);
-  slot dimensions disappear from user types.
-- **The boundary is first-class topology**:
-  - A bounded complex has a **boundary subcomplex `∂g`**, and incidences are partial
-    exactly at `∂g`.
-  - ICON's `refin_ctrl` is a **distance-to-boundary filtration** of `g`, so the
-    lateral boundary levels and the nudging zone are subcomplexes `Collar[k]`.
-  - Boundary data lives on boundary locations (`At[Boundary[Edge], Full]`), so a
-    boundary condition appears in an operator's signature.
+  Sparse fields live on incidences (`Field[At[Incidence[Cell, Edge]]]`, the §4 Σ
+  type). For example, ICON's `geofac_div` factors into a sign (topology) times a
+  metric. Slot dimensions disappear from user types.
+- **Staggering is a placement declaration** of physical variables onto cochain
+  spaces (the FD-syntax note's §6.5 selector):
+  - C-grid: pressure is `Dual[0]`, normal velocity is `Sampled[Dual[1]]`, vorticity
+    is `Dual[2]`.
+  - D-grid: tangential velocity is `Primal[1]`. A C-grid and a D-grid velocity are
+    therefore different types, though both are stored at `Edge`.
+  - A-grid: the collocated grid has no compatible placement (velocity is a
+    vector-valued `Dual[0]`).
+- **The boundary model separates three things**:
+  - **Incidences are total.** On a bounded complex the signed incidence matrices and
+    `d` are complete: a boundary edge simply has one cell. Partiality arises only in
+    fixed-width table representations of cofaces (`E2C` with two slots), in stencils
+    that reach exterior cells (`C2E2C` next to the boundary), and in the dual
+    complex, whose cells around boundary vertices are truncated.
+  - **Boundary conditions are typed operations.** Either they prescribe the
+    restriction of a cochain to the boundary subcomplex `∂g`, as in
+    `with_boundary(flux, flux_in)` with `flux_in: Field[At[Boundary[Primal[1]], Full]]`.
+    Or they supply exterior ("ghost") values for stencils that cross `∂g`.
+  - **Collars are semantic regions with an explicit construction.**
+    - `Collar[k]` is the closure under faces of the top cells within `k`
+      cell-adjacency hops of `∂g`. It is a subcomplex, and the collars are nested in
+      `k`, forming a filtration.
+    - ICON's `refin_ctrl` approximates the collars with per-kind thresholds (cells
+      ≤ 4, edges ≤ 9, vertices ≤ 4), so mapping its levels onto collars needs a
+      per-kind rule.
 - **The mesh kind is a compile-time index**: a product complex lowers to index offsets
   with no tables, a general complex lowers to tables. Weight strategies are mesh
   properties. Column primitives (scan, tridiagonal solve) stay orthogonal on the
@@ -536,63 +625,80 @@ it reuses B's split between logical mesh and distribution.
 
 ### Boundary regions and halo lines
 
-- Boundaries are topology: `∂g`, collars, boundary-located fields. A boundary
-  condition has a mathematical status (relative chains, or ghost cells on `∂g`).
+- Boundaries are topology: `∂g`, collars, boundary-located cochains. A boundary
+  condition is a typed operation: a restriction to `∂g`, or an exterior extension.
 - Halos are the distribution's business; nothing in the surface can express them.
 
 ### Sketch
 
 ```python
-@field_operator
-def div(vn: Field[At[Edge, Full], float], flux_in: Field[At[Boundary[Edge], Full], float]) -> Field[At[Cell, Full], float]:
-    return star(d(star(vn), boundary=flux_in))          # the boundary condition is in the signature
+type P = At[Dual[0], Full]                   # cell-centred scalar, stored at Cell (degree 0: sampled = integrated)
+type Vn = At[Sampled[Dual[1]], Full]         # C-grid normal velocity, point values, stored at Edge
+type FluxIn = At[Boundary[Primal[1]], Full]  # prescribed flux on the boundary edges ∂g
 
 @field_operator
-def grad_n(p: Field[At[Cell, Full], float]) -> Field[At[Edge, Full], float]:
-    return d(p) / dual_edge_length                       # same source on an ICON grid or a Cartesian box
+def grad_n(p: Field[P, float]) -> Field[Vn, float]:
+    return sample(d(p))                      # d: Dual[0] → Dual[1], i.e. p(c2) − p(c1); sample: ÷ dual edge length
+
+@field_operator
+def div(vn: Field[Vn, float], flux_in: Field[FluxIn, float]) -> Field[P, float]:
+    flux = with_boundary(star(integrate(vn)), flux_in)   # Dual[1] →star Primal[1]: flux through primal edges
+    return star(d(flux))                                 # Primal[1] →d Primal[2] →star Dual[0]: ÷ cell area
 ```
+
+The same source runs on a Cartesian box, where `d` lowers to `D ± ½` shifts.
 
 ### Dependent-typing reading
 
-- The complex is `g`. Location types are the families `Cells<g, k>`, indexed by a
-  statically known degree.
+- The complex is `g`. Cochain spaces are the families `Primal<g, k>` and
+  `Dual<g, k>`, indexed by a statically known side and degree.
 - `Incidence<g>` (§4) is a type.
 - The §3 refinement (an exact neighbor list) holds by construction, because the
   incidence *is* the boundary map (§6's "inverted presentation").
-- `∂g` and the collars are refinements defined by the topology; partiality happens
-  exactly on `∂g`.
-- `d∘d = 0` is a structural fact about the operators.
+- `d∘d = 0` is a structural fact; for example, curl ∘ grad = 0 on the C-grid
+  placement.
+- `∂g` and the collars are refinements defined by the topology, with collars defined
+  by an explicit closure.
 - The mesh kind is a compile-time index; the simulation condition is discharged by
   the backend, as in B.
 
 ### Relation to existing notes and the ecosystem
 
-- **Makes the type model** out of the location typing of the FD-syntax note, with
-  `Staggered[D]` from connectivities as types as the per-axis cell class.
+- **Makes the type model** out of the location typing of the FD-syntax note.
+  - The note's `EDGE_N`/`EDGE_T` are `Sampled[Dual[1]]`/`Primal[1]` here: the
+    primal/dual distinction, not the per-axis direction split.
+  - The FD note names its complexes the other way round: its primal 0-cells are
+    `CELL`.
+  - `Staggered[D]` from connectivities as types is the per-axis cell class on product
+    complexes.
 - **Unifies** UGRID (degrees) and SGRID (bit vectors) as one complex model, which is
   the structural observation of
   [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|the conventions appendix]].
-- **Ecosystem**: CF's `cell_methods` point/cell distinction is the degree of a
-  location; Firedrake/UFL function spaces, Decapodes, PyDEC and TRiSK are the
-  precedents.
+- **Ecosystem**:
+  - CF's `cell_methods` (point vs cell mean or sum) describes the value-representation
+    axis (sampled vs integrated), independently of where a value is stored.
+  - Firedrake/UFL function spaces, Decapodes, PyDEC and TRiSK are the precedents.
 
 ### Strengths and costs
 
 **Strengths:**
 - Halo lines are fully out of source.
-- Boundary conditions are typed and structural.
+- Boundary conditions are typed operations.
 - The same source runs on structured and unstructured meshes.
 - Conservation and the mimetic identities are structural.
-- The smallest user vocabulary.
+- C-grid and D-grid variables are distinct types.
 
 **Costs:**
 - All of B's backend burden.
+- Users must know each variable's side, degree and representation. The vocabulary
+  is small but more abstract than locations.
 - ICON's order-dependent, non-canonical stencils (`E2C2V` for RBF, `C2E2C2E2C`) need
   the escape hatch heavily.
-- Only the compatible staggerings (C, D) get the guarantees; PMAP's collocated A-grid
+- Only the compatible placements (C, D) get the guarantees; PMAP's collocated A-grid
   falls outside them.
-- The location algebra needs overloads generated per degree.
-- The mesh's geometry pipeline becomes part of the language contract.
+- The cochain algebra needs overloads generated per side and degree.
+- The mesh's geometry pipeline (dual complex, metric) becomes part of the language
+  contract.
 
 ## Comparison
 
@@ -604,10 +710,10 @@ def grad_n(p: Field[At[Cell, Full], float]) -> Field[At[Edge, Full], float]:
 | Halo depth | configured, or derived from reach | derived or given; never source | as B |
 | Exchange placement | explicit depth-free points, or per-program `auto` | automatic | automatic |
 | Simulation condition discharged by | the programmer (with validity tracking) | the backend | the backend |
-| Boundary regions | declared on entity spaces, pulled back per rank | owned by the mesh, named | `∂g`, collars, boundary-located fields |
-| Partial relations | declared or bound; reads must be guarded | frontend error if unguarded | partial exactly on `∂g` |
+| Boundary regions | declared on entity spaces, pulled back per rank | owned by the mesh, named | `∂g`, collars (explicit closures), boundary-located cochains |
+| Partial relations | declared or bound; reads must be guarded | frontend error if unguarded | incidences are total; only fixed-width tables and exterior stencils are partial at `∂g` |
 | Global reductions | explicit `global_sum` | implicit | implicit |
-| Local dimensions | `Slot[R]` forest plus `Pairs[R]` | as A, scoped to a schema | hidden; incidence fields |
+| Local dimensions | `Slot[R, P]` forest plus `Pairs[R]` | as A, scoped to a schema | hidden; incidence fields |
 | Brand | logical mesh plus local binding | logical mesh (distribution excluded) | as B |
 | Several meshes in one process | runtime brands | typed roles plus relations between meshes | as B |
 | Same source, structured and unstructured | no | no | yes |
@@ -624,24 +730,24 @@ therefore coexist as **levels of one stack**, each lowering to the one below. Ea
 level is useful on its own, and none forces the levels above it.
 
 ```text
- L3  surface    C: located fields, mesh-invariant operators              global semantics
-       │  canonical incidences → named relations of the schema;
-       │  star / weights → geometry fields; Boundary[L] → boundary regions
+ L3  surface    C: cochain-typed fields, mesh-invariant operators        global semantics
+       │  d → signed relations of the schema; star, sample, integrate → geometry fields;
+       │  Boundary[...] → boundary regions
  L2  model      B: logical mesh, fields with a mesh, semantic regions     global semantics
        │  + Distribution: one local binding per rank; regions → Owned ∩ local index sets;
-       │  inferred halo validity → exchanges or redundant computation; global sums → local + allreduce
+       │  inferred validity → exchanges or redundant computation; global sums → local + allreduce
  L1  core       A: index spaces, relations, local binding                 local semantics (SPMD)
-       │  relations → bound tables; Slot / Pairs → local dimensions; exchange → GHEX calls
- L0  execution  GTIR; gtfn / DaCe / embedded backends; FieldData buffers
+       │  kernels → GTIR; exchanges and collectives → a host schedule (an execution plan)
+ L0  execution  GTIR kernels + host schedule; gtfn / DaCe / embedded backends; FieldData buffers
 ```
 
 ### What each lowering does
 
 | From → to | Lowering steps | Obligation |
 | --- | --- | --- |
-| **L3 → L2** | 1. A pair of locations resolves to a canonical relation of the schema, with signs from the recorded orientation. 2. `star` and weights become geometry fields of the mesh instance. 3. `Boundary[L]` fields and collars become boundary regions plus `concat_where`. 4. A structured product complex lowers incidences to `D ± ½` shifts, and an `Edge` cochain to a tuple of fields. | The L2 program computes the same discrete operator. Checkable by diffing the generated code against hand-written ICON4Py stencils, as the FD-syntax note proposes. |
-| **L2 → L1** | Given a `Distribution`: 1. one local binding per rank (local tables with halo rows, local extents, `ι_r`). 2. Semantic regions become local index sets intersected with `Owned`. 3. Domain inference yields the halo validity each read needs; the backend inserts an exchange or extends the producer's domain into the halo (redundant computation), by cost. 4. Global reductions become a local reduction plus an allreduce. 5. The field brand becomes the binding brand, keeping the logical-mesh part. | **The simulation condition**: every L1 rank program reproduces the L2 program on its owned entities. This is the contract to test: run the same L2 program under a trivial and a nontrivial distribution and compare bitwise, except global reductions. |
-| **L1 → L0** | Relations become bound tables keyed by relation tag (today's offset providers); slot and incidence spaces become local dimensions; `exchange` becomes communication-library calls; programs become GTIR. | Today's toolchain contract. |
+| **L3 → L2** | 1. Each `d` resolves to a signed relation of the schema (`d` on `Dual[0]` to `E2C` with signs, `d` on `Primal[1]` to `C2E` with signs), using the recorded orientation. 2. `star`, `sample` and `integrate` become geometry fields of the mesh instance. 3. `with_boundary` and collars become boundary regions plus `concat_where`. 4. A structured product complex lowers `d` to `D ± ½` shifts, and a degree-1 cochain to a tuple of fields. | The L2 program computes the same discrete operator. Checkable by diffing the generated code against hand-written ICON4Py stencils, as the FD-syntax note proposes. |
+| **L2 → L1** | Given a `Distribution`: 1. one local binding per rank (local tables with halo rows, local extents, `ι_r`). 2. Semantic regions become local index sets intersected with `Owned`. 3. Domain inference yields the halo validity each read needs; the backend inserts an exchange or extends the producer's domain into the halo (redundant computation), by cost. 4. Global reductions become a local reduction plus an allreduce. 5. The field brand becomes the binding brand, keeping the logical-mesh part. | **The simulation condition**: every L1 rank program reproduces the L2 program on its owned entities. This is the contract to test: run the same L2 program under a trivial and a nontrivial distribution and compare bitwise, with reproducible global reductions (see the requirement on backends). |
+| **L1 → L0** | Relations become bound tables keyed by relation tag (today's offset providers), and slot and incidence spaces become local dimensions. Field-operator calls become GTIR kernels. Each program becomes an **execution plan**: a host schedule that sequences the kernels with exchanges, collectives and returned scalars. GTIR has only `SetAt`/`IfStmt` statements and no exchange, allreduce or program return, so the schedule is either a host-level representation around GTIR or an extension of GTIR. | Today's toolchain contract for the kernels; a new contract for the schedule. |
 
 With a **trivial distribution** (one rank), L2 → L1 is almost the identity: the local
 binding is the logical mesh and there are no exchanges. A global-semantics stack
@@ -650,15 +756,20 @@ therefore costs nothing on a single node and keeps today's code path.
 ### Rules that keep the levels consistent
 
 1. **One vocabulary across levels.** Entities, axes and relations are declared once
-   as L1 nominal classes. L2 schemas group them (`Face[Icon]` materializes an L1
-   `Entity` class), and L3 locations map onto them per mesh (`At[Cell, Full]` ↦
-   `Dims[Face[M], K]`). Nothing is renamed between levels, so diagnostics and
-   generated code use one set of names.
+   as L1 nominal classes. L2 schemas group them: `Cell[Icon]` materializes an L1
+   `Entity` class, which A's standalone sketch declares directly as `Cell`. L3
+   cochain spaces are stored on them per mesh: `At[Dual[0], Full]` is stored as
+   `Dims[Cell[M], K]`. Nothing is renamed between levels (`Cell`, `Edge`, `Vertex`
+   throughout), so diagnostics and generated code use one set of names.
 2. **Semantics is a property of a program, not of a field operator.**
    - A field operator with no reduction over a distributed dimension is
      *semantics-neutral*: its value on an entity depends only on that entity's
      neighborhood, so it gives the same result under global semantics and per rank
      with valid halos.
+   - The converse fixes the boundary: a reduction over a distributed dimension means
+     different things at the two levels (rank-local vs global). It is therefore
+     **program-level only** (`global_sum` in L1, `sum_over` in L2 programs), and a
+     field operator may not contain one.
    - One library of field operators therefore serves L1 and L2. Only programs
      (domains, communication, global reductions) are global (`@program`) or local
      (`@local_program`), and never both.
@@ -701,7 +812,9 @@ therefore costs nothing on a single node and keeps today's code path.
   - the scan redesign's anchors (vertical boundary regions).
 - **L3**: the FD-syntax note.
 - **Today's gt4py is an L1/L0 system with local semantics**, with ICON4Py doing the
-  L2 work by hand. The stack adds levels above it; it replaces nothing below.
+  L2 work, and the communication schedule, by hand. The stack adds levels above it,
+  plus a communication-aware execution plan around the GTIR kernels at L0. It
+  replaces nothing below.
 
 ### An incremental path
 
@@ -753,7 +866,10 @@ These hold whichever direction is chosen.
 6. **One meaning for subscripting a dimension.** Today `D[...]` is wanted for regions
    (`K[1:nlev]`), slot indices (`V2E[1]`) and type construction (`Staggered[K]`).
 7. **Table entries index the codomain's logical extent**, with the index origin
-   recorded or rebased on load (as uxarray's loader does).
+   recorded or rebased on load. uxarray's loader attempts this, but only
+   conditionally, and it guesses the origin when `start_index` is absent (research
+   appendix §4.3). A gt4py loader should normalize and validate the origin
+   unconditionally.
 8. **Some relations have tables known at compile time** (the scan redesign's
    vertical windows, Cartesian offsets). They need a binding mode of their own.
 9. **Verticality belongs to the logical mesh, distribution to the decomposition,
@@ -769,6 +885,10 @@ These hold whichever direction is chosen.
      field and the program, as the
      [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|connectivities staggering appendix]]
      §7 argues.
+   - This separates the *geometric* vertical, which may be absent (a box with no
+     preferred direction), from the *computational* roles: the sequential scan axis
+     and the undecomposed axis. The appendix's "a role, not a geometry" holds for the
+     roles only; see the conflicts section.
 10. **Dimension genericity (`TypeVar`/`TypeVarTuple` over dimensions) is a
     prerequisite** for all three. Without it, staggering costs 14 operators where 4
     generic ones suffice
@@ -795,14 +915,23 @@ These hold whichever direction is chosen.
 
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types|Connectivities as types]]
   provides the L1 base. **Conflicts**:
-  - `V2E.Local` (nested, owned) vs `Slot[R]` (subscripted, generic-friendly), with
-    `Pairs[R]` replacing the owner/sharer rules;
+  - `V2E.Local` (nested, owned, no parent) vs `Slot[R, P]` (subscripted, carries
+    its parent, generic-friendly), with `Pairs[R]` replacing the owner/sharer rules;
   - `offset_provider` vs a binding or mesh object;
   - its conventions appendix §5 lists "owned versus halo entities" as an ICON need
     for UGRID's `location_index_set`, which treats a decomposition concept as a
     semantic subset;
   - its open question 2 counts "halo variants" among the multi-table cases, whereas
-    here the mesh identity excludes the decomposition.
+    here the mesh identity excludes the decomposition;
+  - its staggering appendix §1 says per-axis staggering keeps apart "the two edge
+    families" that unstructured code recovers as the component label `EDGE_N` vs
+    `EDGE_T`. The per-axis bits split edges by *direction*. `EDGE_N`/`EDGE_T` split
+    them by *primal vs dual 1-form* (C-grid vs D-grid; `Sampled[Dual[1]]`/`Primal[1]`
+    in Proposal C), and that split is orthogonal to direction. The FD-syntax note
+    §3.3 makes the same identification;
+  - its staggering appendix §7 calls the vertical "a role, not a geometry". Decision
+    9 keeps that for the computational roles (scan axis, undecomposed axis) but
+    places the geometric vertical in the logical mesh.
 - [[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos|A mesh concept with first-class halos]]:
   compatible with B, where it becomes the `Distribution` plus the L2 → L1 lowering;
   its skip-value split is adopted. **Conflict**: it treats sparse data fields over
@@ -823,8 +952,8 @@ These hold whichever direction is chosen.
   "support ⊇ domain" is how a halo looks at L0 (data beyond the compute domain,
   private like the origin). Its absolute coordinates are qualified by decision 2.
 - [[personal/havogt/dependent-local-dimensions/dependent-local-dimensions|Dependent local dimensions]]:
-  A adopts its forest. Its `Local[C]` spelling matches `Slot[R]`, not
-  connectivities-as-types' `V2E.Local`.
+  A adopts its forest. Its `Local[C, P]` spelling, with a parent, matches
+  `Slot[R, P]`, not connectivities-as-types' `V2E.Local`.
 - [[personal/havogt/dimension-generic-fields/dimension-generic-fields|Generic dimensions and staggering]]:
   dimension genericity is a prerequisite (decision 10). Its `Dual[X]` name is
   reserved here for the full Hodge dual (C's `star`), as the connectivities
@@ -832,6 +961,10 @@ These hold whichever direction is chosen.
 - [[personal/egparedes/discretization-independent-fd-syntax|Discretization-independent FD syntax]]:
   C is its Proposal 3 made the type model, and L3 is its front-end. Its "halo
   exchange is never written by the user" is global semantics.
+  - Its form-degree placement (`P(0)=CELL`, `P(1)=EDGE_N`, `P(2)=VERTEX`) is C's
+    C-grid placement on the dual side: the FD note calls primal what C calls dual.
+  - Its §3.3 identification of the per-axis bit vector with the `EDGE_N`/`EDGE_T`
+    distinction is questioned above.
 - **Open PRs**:
   - [GridTools/gt4py_knowledge#31](https://github.com/GridTools/gt4py_knowledge/pull/31)
     (a default domain plus per-output restrictions) restricts outputs with zone
