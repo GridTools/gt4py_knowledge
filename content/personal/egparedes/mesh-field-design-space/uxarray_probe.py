@@ -10,13 +10,21 @@ Last run: uxarray 2026.9.1 (source read at UXARRAY/uxarray c05cb5a). Expected ou
     5-element n_face array on a 2-face grid accepted: True
     node -> face aggregation dims: ('n_face',)
     lon equal: True lat equal: False grids equal: True
+    explicit one-based, standardized dtype/fill: [[1, 2, 3]] UGRID-normalized: [[0, 1, 2]]
+    omitted origin, node zero unused: [[0, 1, 2]] UGRID-normalized: [[1, 2, 3]]
+
+The last two assertions pin observed public-loader regressions, not desired
+behaviour. The proposed loader contract in the note uses the UGRID-normalized
+values, independently of dtype/fill conversion.
 """
 
 import warnings
 
 import numpy as np
+import xarray as xr
 
 import uxarray as ux
+from uxarray.constants import INT_DTYPE, INT_FILL_VALUE
 
 warnings.filterwarnings("ignore")
 
@@ -51,3 +59,46 @@ print(
     "lat equal:", g1.node_lat.equals(g3.node_lat),
     "grids equal:", g1 == g3,
 )
+
+
+def loader_dataset(dtype, attrs):
+    """Minimal UGRID dataset; node zero exists but is not referenced."""
+    return xr.Dataset(
+        {
+            "mesh": xr.DataArray(
+                0,
+                attrs={
+                    "cf_role": "mesh_topology",
+                    "topology_dimension": 2,
+                    "node_coordinates": "lon lat",
+                    "face_node_connectivity": "conn",
+                },
+            ),
+            "lon": (
+                "node", np.array([0.0, 10.0, 0.0, 10.0]),
+                {"standard_name": "longitude", "units": "degrees_east"},
+            ),
+            "lat": (
+                "node", np.array([0.0, 0.0, 10.0, 10.0]),
+                {"standard_name": "latitude", "units": "degrees_north"},
+            ),
+            "conn": (("face", "slot"), np.array([[1, 2, 3]], dtype=dtype), attrs),
+        }
+    )
+
+
+for label, ds, observed, normalized in [
+    (
+        "explicit one-based, standardized dtype/fill",
+        loader_dataset(INT_DTYPE, {"_FillValue": INT_FILL_VALUE, "start_index": 1}),
+        [[1, 2, 3]], [[0, 1, 2]],
+    ),
+    (
+        "omitted origin, node zero unused",
+        loader_dataset(np.int32, {}),
+        [[0, 1, 2]], [[1, 2, 3]],
+    ),
+]:
+    actual = ux.Grid.from_dataset(ds).face_node_connectivity.values.tolist()
+    assert actual == observed, (label, actual, observed)
+    print(label + ":", actual, "UGRID-normalized:", normalized)

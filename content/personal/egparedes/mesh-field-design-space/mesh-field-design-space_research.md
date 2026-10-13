@@ -23,6 +23,11 @@ status: draft
   - coordax `765bb88` (0.2.8);
   - uxarray `c05cb5a` (installed as 2026.9.1).
 
+  ICON4Py details were cross-checked at `e9060a1898823d38028b5cbf7f506e460fc451d7`;
+  today's GTIR kernel/host-plan distinction at gt4py
+  `f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f`. The library observations below are
+  version-specific, not normative loader or typing contracts.
+
   Probes: [`xarray_probe.py`](xarray_probe.py), [`coordax_probe.py`](coordax_probe.py),
   [`uxarray_probe.py`](uxarray_probe.py). Each has its run command and expected
   output in its docstring.
@@ -30,7 +35,7 @@ status: draft
   - [UGRID 1.0](https://ugrid-conventions.github.io/ugrid-conventions/);
   - [SGRID 0.3](https://sgrid.github.io/sgrid/);
   - [CF-1.13](https://cfconventions.org/Data/cf-conventions/cf-conventions-1.13/cf-conventions.html)
-    (17 Dec 2025, the latest release), cited by section;
+    (17 Dec 2025), cited by section;
   - the CF data model paper, Hassell et al. 2017, *GMD* 10:4619–4646.
 
 ## 2. Knowledge-base inputs
@@ -39,14 +44,14 @@ status: draft
 | --- | --- | --- |
 | [[personal/egparedes/connectivities-as-types/connectivities-as-types\|Connectivities as types]] | Nominal dimension classes, identified by qualified name. `NeighborConnectivity[Domain, Codomain]` declarations with a nested `Local`. A table bound per call and checked at the boundary. `Staggered[D]` on a declared Cartesian axis. | Four strings that had to agree (tag, variable, local dimension, provider key). Counts and skip-value presence are mesh- and configuration-dependent, so they are taken from the bound table. |
 | [[personal/egparedes/connectivities-as-types/connectivities-as-types_dependent-typing\|Dependent-typing appendix]] | The theoretical base: `Fin`, Π, Σ, refinements, evidence, enumeration, parameter vs index, validating at the boundary. | gt4py takes the "middle road": brands, validated constructors, checks at the boundary. |
-| [[personal/havogt/dependent-local-dimensions/dependent-local-dimensions\|Dependent local dimensions]] | Chained connectivities. Path (LIFO) vs forest (leaf rule) typing of local dimensions; the forest is the true invariant. | Reduction order matters operationally (streaming, gathered masks). At most one live local dimension today. |
-| [[personal/havogt/dimension-generic-fields/dimension-generic-fields\|Generic dimensions and staggering]] | Dimension `TypeVar`/`TypeVarTuple`; per-rank and per-position overloads for changing a dimension; `Dual[X]` via decorator overloads. | 4 generic vs 14 concrete operators on the shallow-water C-grid kernel: staggering without dimension genericity is a regression. |
+| [[personal/havogt/dependent-local-dimensions/dependent-local-dimensions\|Dependent local dimensions]] | Chained connectivities. Path (LIFO) vs forest (leaf rule); forest slots require `Local[C, P]` ancestry and reparenting. | Reduction order matters operationally (streaming, gathered masks). At most one live local dimension today. |
+| [[personal/havogt/dimension-generic-fields/dimension-generic-fields\|Generic dimensions and staggering]] | Dimension `TypeVar`/`TypeVarTuple`; per-rank and per-position overloads for replacing a dimension wherever it occurs; `Dual[X]` via decorator overloads. | 4 generic vs 14 concrete operators on the shallow-water C-grid kernel: staggering without dimension genericity is a regression. |
 | [[personal/havogt/mesh-and-first-class-halos/mesh-and-first-class-halos\|Mesh with first-class halos]] | A V/E/C vocabulary. Multi-hop relations as compositions that are kept materialized. Halo depth as a symbolic relation closure. Ownership triple plus execution classes. Exchange placement as forward dataflow. | Three causes of skip values: pentagons, LAM boundary, halo edge of reach. Neighbor order is load-bearing. "Keep the vertical out of the mesh". |
 | [[personal/havogt/field-data-protocol/field-data-protocol\|Field data protocol]] | A field is a function over absolute, possibly infinite coordinates. The origin is private to the buffer. Support ⊇ domain. | One layer owns all domain arithmetic. |
 | [[personal/havogt/boundary-condition-syntax/boundary-condition-syntax\|Boundary-condition syntax]] | Domains as conditions (`concat_where`); region literals `K[0]`, `K[1:nlev]`; restriction as decomposition. | ICON4Py horizontal conditions use named index symbols that mix boundary and halo bounds. `Domain.__bool__` must raise. |
 | [[personal/havogt/scan-redesign/scan-redesign\|Scan redesign]] | Anchored vertical ranges (`KDim.start`/`KDim.stop`). Forward-anchored vertical domain inference. Static vertical windows as compile-time connectivities. | The vertical is never distributed. Half levels (n+1) are staggering. Bare negative indices are not allowed. |
 | [[personal/havogt/dtype-generic-fields/dtype-generic-fields\|Dtype-generic fields]] | Declare statically, bind at call time, monomorphize at FOAST (two-level type theory). | Strict: exact match or error, no promotion. |
-| [[personal/egparedes/discretization-independent-fd-syntax\|Discretization-independent FD syntax]] | Gather–weight–reduce normal form. Location typing over the de Rham complex. The mesh as a partial-evaluation input. Staggering as a declared family selector. | Only compatible staggerings (C, D) keep the structural guarantees. The vertical and limiters need escape hatches. "Halo exchange is never written by the user". |
+| [[personal/egparedes/discretization-independent-fd-syntax\|Discretization-independent FD syntax]] | Gather–weight–reduce normal form. Location typing, with distinct `EDGE_N`, `EDGE_T`, `EDGE` quantities. Mesh as a partial-evaluation input. | C/D structural guarantees require compatible cochain representations/operators, qualified in main C. The vertical and limiters need escape hatches. "Halo exchange is never written by the user". |
 | [[knowledge/software-engineering/principles\|Working principles]] | Deep modules, DRY, making implicit concepts explicit, bounded contexts and anticorruption layers. | Red flags: information leakage, buried rules, unexamined constraints. |
 
 Related work still in open PRs at the time of writing:
@@ -67,8 +72,11 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
   - 8 tables are read from the grid file (1-based, converted to 0-based); the multi-hop ones are derived.
   - Neighbour order is semantic: `icon_edge_order` exists because `compute_e_flx_avg` depends on it.
 - **Zones and layout**:
-  - `Zone` = `LATERAL_BOUNDARY..LEVEL_8`, `NUDGING`, `INTERIOR`, `HALO`, `HALO_LEVEL_2`, `LOCAL`.
-    These are ports of ICON's `rl_start`/`rl_end` and `refin_ctrl`.
+  - At the pinned ICON4Py revision, cells/vertices use `END`, `INTERIOR`, `LOCAL`,
+    `HALO`, `HALO_LEVEL_2`, `LATERAL_BOUNDARY` (level 1) through `LEVEL_4`, and
+    `NUDGING`. Edges additionally use `HALO_LEVEL_3`, boundary levels 5–8 and
+    `NUDGING_LEVEL_2`. These port ICON's `rl_start`/`rl_end` and `refin_ctrl`
+    ([horizontal.py](https://github.com/C2SM/icon4py/blob/e9060a1898823d38028b5cbf7f506e460fc451d7/model/common/src/icon4py/model/common/grid/horizontal.py#L111)).
   - The local memory layout is `|lateral-boundary|nudging|interior|halo1|halo2|`.
   - LAM halos are not contiguous.
   - **One vocabulary covers both semantic boundary zones and decomposition zones.**
@@ -77,6 +85,13 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
   - multi-hop tables are incomplete in the outer halo;
   - granules compute into the halo by hand (`end_index(HALO_LEVEL_2)`);
   - exchanges (GHEX) are placed by hand.
+  - The second cell halo closes vertex hexagons, not the exact four-hop cell
+    neighbourhood; imported support must be checked against each program's required
+    footprint ([halo.py](https://github.com/C2SM/icon4py/blob/e9060a1898823d38028b5cbf7f506e460fc451d7/model/common/src/icon4py/model/common/decomposition/halo.py#L280)).
+- **Boundary/feedback labels**: ICON v2.6.4 counts edge levels differently from
+  cell/vertex levels; negative `refin_ctrl` values mark parent-child overlap.
+  These are semantic masks, not automatically closed subcomplexes or a common
+  distance filtration ([nesting paper, Appendix A1](https://gmd.copernicus.org/articles/15/7153/2022/#A1)).
 - **Skip values**:
   - from pentagons (intrinsic arity), the LAM lateral boundary (semantic), and the edge of the halo (an artifact);
   - `keep_skip_values=False` rewrites tables to hide the artifact and cannot tell the three apart.
@@ -132,7 +147,7 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
 ### 4.3 uxarray
 
 - **The mesh is `Grid`** (`uxarray/grid/grid.py:116`). It wraps a UGRID-encoded
-  `xr.Dataset` with lazily derived connectivities (12 properties named by entity
+  `xr.Dataset` with lazily derived connectivities (9 properties named by entity
   pair), geometry, and subsetting with `inverse_indices`. Readers exist for UGRID,
   MPAS, ICON, ESMF, Exodus, SCRIP, FESOM2 and HEALPix.
 - **A fixed vocabulary removes the string-agreement problem**
@@ -142,9 +157,20 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
     `edge_node_connectivity` and `edge_face_connectivity` share. That conflates two
     different slot spaces.
   - A field's location is inferred from its dimension name (`data_mapping`).
-- **Loader normalization**: on load, `_FillValue` becomes one sentinel
-  (`INT_FILL_VALUE`, the minimum of `intp`) and `start_index` is rebased to 0
-  (`uxarray/io/_ugrid.py:206-252`). `Grid.validate()` is opt-in and never called
+- **Loader normalization is conditional**, not a safe normalization contract.
+  At [c05cb5a, `uxarray/io/_ugrid.py:214–252`](https://github.com/UXARRAY/uxarray/blob/c05cb5a/uxarray/io/_ugrid.py#L214),
+  fill/dtype conversion uses `INT_FILL_VALUE` (minimum of `intp`), and rebasing is
+  nested under that conversion branch. Through public `Grid.from_dataset` in
+  2026.9.1 **(ran)**:
+  - `INT_DTYPE` + `INT_FILL_VALUE` + `start_index=1` leaves row `[1,2,3]` unchanged,
+    although normalized output should be `[0,1,2]`;
+  - int32 input with omitted `start_index` and an unreferenced node 0 rebases
+    row `[1,2,3]` to `[0,1,2]`, although UGRID defaults to zero origin and the
+    indices should remain unchanged.
+
+  The extended pinned probe records both regressions. The **proposed** loader in
+  main decision 7 normalizes independently of dtype/fill, honours explicit origin
+  and the zero default, and checks bounds. `Grid.validate()` is opt-in, not called
   internally.
 - **Ragged degree**: topological aggregations partition faces by their true node
   count (`uxarray/core/aggregation.py`, `get_face_node_partitions`). They pick the
@@ -168,7 +194,7 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
 | | xarray | coordax | uxarray | gt4py (connectivities as types) |
 | --- | --- | --- | --- | --- |
 | Dimension identity | hashable (usually `str`) | `str` | fixed UGRID names | nominal class, qualified name |
-| Connectivity | data; the result takes the table's dimensions | data, via `cmap` | 12 lazily derived grid properties | declaration class plus a table bound per call |
+| Connectivity | data; the result takes the table's dimensions | data, via `cmap` | 9 entity-pair properties (node/edge/face squared) | declaration class plus a table bound per call |
 | Local dimension owned by | the table value | the table value | the connectivity (fixed name), except `two` | the declaration (`V2E.Local`) |
 | Skip values | none | none | one fill sentinel; true ragged degree in aggregations | `skip_value`, `max_neighbors`/`min_neighbors` |
 | Mesh object | none | none (a `Coordinate` could act as one) | `Grid` | none (the provider dict) |
@@ -184,16 +210,19 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
   whose attributes name connectivity arrays by entity pair
   (`face_node_connectivity`, …):
   - ragged rows are padded with `_FillValue`;
-  - `start_index` ∈ {0, 1};
+  - `start_index` ∈ {0, 1}, default zero when omitted; minimum referenced index
+    does not determine origin;
   - a data variable carries `mesh` and `location`, or `location_index_set` for data
     on a subset;
   - face nodes *should* be anticlockwise.
 - **SGRID**: structured topology with `node_dimensions`, `face_dimensions` and
   `padding` ∈ {none, low, high, both}. A data variable carries `grid` and `location`
   (`node`, `edge1`, `edge2`, `face`).
-- **Locations**: UGRID locations are cell **degrees**; SGRID locations are per-axis
-  **bit vectors**. The split follows whether the complex is a product or not
-  (see [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|the conventions appendix]]).
+- **Locations**: UGRID names entity placement (node/edge/face), which can correspond
+  to primal degrees; SGRID names product staggering via per-axis **bit vectors**.
+  Neither alone determines cochain side, quantity or point/integrated representation
+  (see [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|the conventions appendix]]
+  and main C).
 
 ### 5.2 CF-1.13
 
@@ -211,7 +240,8 @@ From the ICON4Py surveys appended to the mesh and boundary-condition notes:
   - `bounds` add a trailing vertex dimension (§7.1);
   - `cell_measures` (`area`/`volume`, §7.2);
   - `cell_methods` (§7.3) say whether a value is a point value (`point`) or a cell
-    aggregate (`area: mean`); methods apply in order.
+    aggregate (`area: mean`); methods apply in order. This sampling/aggregation
+    metadata is independent of mesh placement: both can be face-located.
 - **Domain construct** (§5.8, since CF-1.9): "A domain describes data locations and
   cell properties." A domain variable describes a domain "in the absence of any data
   values". In the data model (Appendix I), a **field is a data array plus a
