@@ -226,7 +226,7 @@ check the declared numerical/control behaviour of the excepted outputs separatel
 | Semantics of a program | local (A) / global (B, C) |
 | Where the mesh lives (§7) | parameter of the call plus a runtime brand (A) / carried by every field (B) / inherited, plus mesh *kind* at compile time (C) |
 | User vocabulary | index spaces and relations (A) / mesh schema, entities and regions (B) / cochain core plus located quantity/sampling facade (C) |
-| Local dimensions | dependent slots and incidence spaces (A, B) / hidden behind incidences (C) |
+| Local dimensions | dependent slots and slot-flattened Σ spaces (A, B) / hidden behind incidences and named conversions (C) |
 | Boundary regions | declared on entity spaces (A) / owned by the mesh (B) / topology plus semantic masks (C) |
 
 ## Proposal A — Typed relations over a rank-local mesh
@@ -349,8 +349,11 @@ reducing `Slot[V2V, Vertex]` first is illegal. Siblings such as
 both slots are leaves and either reduction order is legal (floating-point results
 still follow the chosen evaluation tree). Two independent uses with identical
 ancestry require explicit nominal occurrence labels; otherwise they align as the
-same axis. Reparenting and sibling broadcasting are proposed contracts, not
-demonstrated capabilities of today's gt4py/checkers.
+same axis. Reparenting and sibling broadcasting are proposed contracts for gt4py.
+The [[personal/havogt/dependent-local-dimensions/dependent-local-dimensions|dependent-local-dimensions prototype]]
+§5.4 demonstrates the bounded-overload encoding under mypy for chains of depth
+≤ 2 and two siblings, including reparenting and the leaf rule. General forest
+handling remains a proposed frontend check.
 
 Footprints are sets; stencils are ordered enumerations with a declared policy for
 self inclusion, duplicate paths and skip slots. On a triangular cell,
@@ -389,7 +392,8 @@ class K(Axis): ...                                      # Staggered[K]: the half
 
 class C2E(Relation[Cell, Edge], max_neighbors=3): ...
 class E2C(Relation[Edge, Cell], max_neighbors=2): ...   # partial on a LAM mesh: boundary edges have one cell
-class C2E2C(Relation[Cell, Cell], max_neighbors=3, reach=2): ...  # checked other-cell-per-edge enumeration
+# Footprint term (hop bound 2); binding checks the self-excluding enumeration.
+class C2E2C(Relation[Cell, Cell], max_neighbors=3, reach=C2E @ E2C): ...
 C2ESlot = Slot[C2E, Cell]                               # alias usable in annotations and as an axis value
 CE = Pairs[C2E]                                         # Σ c. Fin(deg c): the flattened cell-edge space
 
@@ -681,10 +685,12 @@ encoding and reject wrong-side calls. This demonstrates signatures, not arbitrar
 inference or an implemented operator. The terminal `d` into a zero space can be
 omitted from the API; its mathematical existence is unchanged.
 
+The mesh *kind* (product or general complex) is a compile-time index. Product
+incidences lower to fixed index shifts without tables; general complexes lower
+to signed tables. Metric and weight strategies are mesh properties.
 On a structured 2-D box, each side's degree-1 space has two directional edge
-blocks. Product incidences lower to fixed index shifts; general complexes lower
-to signed tables. This directional split is independent of both primal/dual side
-and normal/tangential quantity.
+blocks. This directional split is independent of both primal/dual side and
+normal/tangential quantity.
 
 ### Located facade and conversion contracts
 
