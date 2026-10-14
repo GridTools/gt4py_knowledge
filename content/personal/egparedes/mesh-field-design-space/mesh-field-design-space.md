@@ -18,9 +18,10 @@ status: draft
 > - **B — Logical mesh object plus a runtime decomposition.** *Global semantics*. A
 >   field is a pair (logical mesh, data). Boundary regions belong to the mesh; halos
 >   belong to a separate `Distribution` that source code cannot name.
-> - **C — Located fields over cell complexes.** *Global semantics*. Types separate
->   placement and quantity from primal/dual cochain representation. Operators use
->   signed incidences; topological boundaries coexist with semantic masks.
+> - **C — Cochain core with located fields.** *Global semantics*. Side/degree types
+>   define an integrated cochain core; a located-field facade adds quantity and
+>   sampling semantics through explicit conversions. Signed incidences and metric
+>   maps implement operators; topological boundaries coexist with semantic masks.
 >
 > All three separate the **logical mesh** (topology, geometry, boundary regions:
 > semantic) from the **decomposition** (ownership, halo lines: implementation). They
@@ -87,9 +88,16 @@ Mesh g       = { entity counts; relations r : (v : A<g>) → Vec<B<g>, deg_r(v)>
 A<g>         = Fin<g.n_A>                           -- an entity index space is a type family over g
 Field<g,L,T> = L<g> → T                             -- a function on one location of one mesh
 Slot<g,r,v>  = Fin<deg_r(v)>                        -- a neighbor slot depends on g, r and v (Π)
-Incid<g,r>   = Σ v : A<g>. Fin<deg_r(v)>           -- an incidence: a flattened sparse position (Σ)
+SlotPos<g,r> = Σ v : A<g>. Fin<deg_r(v)>           -- a compact valid-slot occurrence (Σ)
+Incid<g,r>   = Σ v : A<g>. { e : B<g> | e ∈ r(v) } -- a distinct endpoint pair (Σ)
 program      : (g : Mesh) → Field<g,E,T> → Field<g,V,T>   -- Π over the mesh
 ```
+
+Here `r(v)` enumerates valid occurrences, and `deg_r(v)` counts them, excluding
+padding. Evaluation maps `SlotPos` to `Incid`; it is a bijection exactly when each
+row is injective. Repeated paths keep distinct slot occurrences with the same
+endpoint pair. Padded storage additionally needs the valid-raw-slot ↔ compact-rank
+map specified in A; raw padding positions belong to neither semantic space.
 
 ### What Python can keep
 
@@ -172,7 +180,7 @@ The three causes are those identified by
 | Cause | Owner | Visible in source |
 | --- | --- | --- |
 | ragged arity (pentagons) | the relation's table type: `max_neighbors`, presence of skip values | yes |
-| boundary partiality: a missing neighbor at the LAM lateral boundary | the logical mesh: a **partial relation** (declared, or taken from the bound table) | yes: reads must be guarded by a boundary condition or a domain that excludes the boundary |
+| boundary partiality: a missing fixed-width coface slot (`E2C`) or exterior stencil value (`C2E2C`) | the logical mesh: a **partial relation** (declared or bound); a boundary edge's actual one-cell incidence is complete | yes: reads need a boundary condition or a domain excluding the missing footprint |
 | truncation at the edge of the halo | the decomposition | never observable |
 
 ### Global and local semantics
@@ -195,11 +203,14 @@ dtype, target and arithmetic policy, per-entity results independent of
 non-reproducible collectives must be **bitwise identical under decomposition**.
 Preserve neighbour enumeration *and* the arithmetic evaluation tree: contraction,
 reassociation, and scalar/vector code generation must follow the same rounding
-policy for exchanged and redundantly computed values. Table order alone is insufficient.
+policy for exchanged and redundantly computed values, including remainder loops
+and FMA contraction. Table order alone is insufficient.
 
 Programs choose reproducible distributed reductions for the strict contract,
 including local accumulation: a deterministic allreduce of already rounded
-rank-local sums is insufficient. Otherwise they accept
+rank-local sums is insufficient. Candidate strategies are a fixed tree over global
+indices, exact accumulators, or a specified reproducible binned algorithm, with
+matching local accumulation and final rounding. Otherwise they accept
 partition-dependent collective results and a **transitive exception for all their
 data and control dependants**, including per-entity outputs. For example,
 `sum([1e16, -1e16, 1])` is `1`, whereas grouping `[1e16]` and `[-1e16, 1]` gives
@@ -214,7 +225,7 @@ check the declared numerical/control behaviour of the excepted outputs separatel
 | --- | --- |
 | Semantics of a program | local (A) / global (B, C) |
 | Where the mesh lives (§7) | parameter of the call plus a runtime brand (A) / carried by every field (B) / inherited, plus mesh *kind* at compile time (C) |
-| User vocabulary | index spaces and relations (A) / mesh schema, entities and regions (B) / locations and operators (C) |
+| User vocabulary | index spaces and relations (A) / mesh schema, entities and regions (B) / cochain core plus located quantity/sampling facade (C) |
 | Local dimensions | dependent slots and incidence spaces (A, B) / hidden behind incidences (C) |
 | Boundary regions | declared on entity spaces (A) / owned by the mesh (B) / topology plus semantic masks (C) |
 
@@ -266,8 +277,9 @@ is also what the ICON Fortran granule path needs natively.
   Subscription keeps ancestry nameable in generic code; bounded generated overloads
   may enforce these rules statically, with the general forest checked by the DSL
   frontend. Ordinary Python generics alone do not prove the leaf rule.
-- **Incidence spaces are Σ types**: `Pairs[C2E]` is the flattened (cell,
-  edge-of-cell) space, ICON's `CE`. A sparse field has two addressings:
+- **Slot-flattened spaces are Σ types**: `Pairs[R]` realizes `SlotPos<g,r>`.
+  For complete, injective triangular `C2E`, it is also the endpoint incidence
+  space, ICON's `CE`. A sparse field has two addressings:
   - `Dims[Cell, Slot[C2E, Cell]]`: padded, CSR-like. Raw positions run over
     `Fin<max_neighbors>`; the dependent slot domain is only each row's
     non-skip positions.
@@ -289,9 +301,9 @@ is also what the ICON Fortran granule path needs natively.
   `C2E @ E2C` row `[self,n1,self,n2,self,n3]` contributes six Σ positions but
   only four endpoint pairs, and the slot index is what keeps independent path
   coefficients distinct (the ordered stencils below rely on exactly this).
-  `Pairs[R]` is a true entity-incidence pair space only when rows are
-  injective — no repeated target within a row — as C's `Incidence[Cell, Edge]`
-  is by construction.
+  `Pairs[R]` corresponds bijectively to the endpoint space `Incid<g,r>` only
+  when valid rows are injective — no repeated target within a row — as C's
+  `Incidence[Cell, Edge]` is in the regular complexes assumed there.
 - **The local binding** `bind_local(...)` holds:
   - local tables, including halo rows;
   - local extents;
@@ -321,9 +333,12 @@ is also what the ICON Fortran granule path needs natively.
   of exchanging, because halo values are caches by definition.
 - **Exchange points are explicit and depth-free**: `exchange(f)` means "make `f`
   valid for its consumers", rejecting requests whose owner values are undefined.
-- **Global reductions are explicit**: `global_sum(f, domain=d)` with `d ⊆ Owned`.
-  Each global entity is counted exactly once, and only the entities in `d` are read,
-  so `d` must not exceed what was written.
+- **Global reductions are explicit and program-level only**:
+  `global_sum(f, domain=d)` with `d ⊆ Owned`. Each selected global entity is counted
+  once, and only the entities in `d` are read, so `d` must not exceed what was
+  written. Reductions over a distributed dimension cannot occur inside a field
+  operator; neighbourhood/slot reductions and undistributed-axis scans remain local
+  operator primitives (layering rule 2).
 
 ### Slot ancestry and ordered stencils
 
@@ -401,6 +416,9 @@ remote values, and a host collective returns the scalar. This example's reductio
 reads only owned `interior`, so its exchange can be elided. Today's program
 lowering emits field-operator calls as `SetAt` statements, not this entire schedule
 ([pinned lowering](https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/ffront/past_to_itir.py#L286)).
+The pinned [GTIR statement model](https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/iterator/ir.py#L124)
+contains `SetAt` and `IfStmt`, with no host exchange, allreduce or program-return
+primitive. This design adds the host-plan layer around existing kernels.
 
 ### Dependent-typing reading
 
@@ -512,7 +530,7 @@ cheaper, and splits global reductions.
 - **Domains in source** are semantic regions only, e.g.
   `grid.region(Face[Icon]) - LateralBoundary.levels(1, 4)`. There is no
   `INTERIOR`/`HALO` vocabulary. Reductions over entity dimensions are global by
-  definition.
+  definition and belong to programs, not field operators.
 - **The compile key** is the mesh *signature* (schema, table types, region layout)
   plus the distribution's parameters where they affect the generated loops, never the
   instance. One compiled program serves many meshes.
@@ -591,7 +609,7 @@ mass = sum_over(out, axis=Face[Icon], domain=interior)      # global by semantic
 - Every field needs a mesh, so a `CartesianGrid` schema becomes mandatory even for
   test fields.
 
-## Proposal C — Located fields over cell complexes
+## Proposal C — Cochain core with located fields
 
 > **Semantics: global.** Programs express operators on the logical complex. The
 > decomposition is invisible in source and handled as in B: a runtime
@@ -599,46 +617,97 @@ mass = sum_over(out, axis=Face[Icon], domain=interior)      # global by semantic
 
 ### Thesis
 
-Meshes expose oriented cell complexes where the discretization supports them. An
-unstructured horizontal complex can be combined with 1-D axis complexes; a
-structured grid is a product of axes. The surface separates **physical placement
-and quantity** from **cochain side, degree and representation**. Operators resolve
-those choices to signed incidences and metric maps. Named relations and
-reconstructions remain escape hatches. This develops Proposal 3 of
-[[personal/egparedes/discretization-independent-fd-syntax|the FD-syntax note]],
-with explicit representation contracts, and reuses B's logical mesh / distribution
-split.
+C has two connected layers: an **integrated cochain core**, typed by primal/dual
+side and degree, and a **located-field facade**, typed by physical placement,
+quantity and sampling. Named conversions connect them; the core's algebra alone
+does not establish the physical interpretation of a coefficient. This develops
+Proposal 3 of [[personal/egparedes/discretization-independent-fd-syntax|the FD-syntax note]]
+and reuses B's logical mesh / distribution split. Named relations and
+reconstructions remain escape hatches.
 
-### Placement, cochains and operator signatures
+### Cochain core: side, degree and derived storage
 
-- **Placement** says where storage/samples live: `Cell`, `Edge`, `Vertex`, combined
-  with vertical staggering and sampling, e.g. `At[CellScalar, Full, Point]`. `EdgeNormal`,
-  `EdgeTangential` and `EdgeScalar` distinguish quantities at the same edge.
-  Normal/tangential is a component distinction on unstructured meshes too; it is
-  independent of a structured edge cochain having two directional field blocks.
-- **Cochains** `C_P^k(H)` and `C_D^k(H)` are integrated values on oriented primal
-  and dual horizontal k-cells. Primal vertex/edge/face have degrees 0/1/2; a cell
-  centre can instead carry a **dual 0-cochain**. A point sample or cell average on
-  a face is not automatically an integrated primal 2-cochain. Conversion requires
-  a declared reconstruction/quadrature or measure, with units and orientation.
-- **Topology and metric** have separate signatures on a validated n-complex:
+Use the mesh-as-stored convention: primal `Vertex`, `Edge`, `Cell` have horizontal
+degrees 0, 1, 2. An admissible geometric dual pairs their bulk DOFs as follows;
+a bounded dual needs the additional completion/relative policy described below.
+This table identifies storage, not point-sampling semantics or boundary closure.
 
-  ```text
-  d_P^k : C_P^k -> C_P^(k+1)       d_D^k : C_D^k -> C_D^(k+1)
-  star_P^k : C_P^k -> C_D^(n-k)    star_D^k : C_D^k -> C_P^(n-k)
-  ```
+| Degree | Primal cochain support | Dual cochain support | Canonical storage entity for the dual |
+| --- | --- | --- | --- |
+| 0 | vertices | dual vertices at cell centres | `Cell` |
+| 1 | primal edges | crossing dual edges | `Edge` |
+| 2 | primal cells | dual cells around primal vertices | `Vertex` |
 
-  `d` is the signed coboundary on one side; `star` includes metric factors and the
-  chosen orientation conventions. A diagonal circumcentric star uses primal/dual
-  measure ratios on an admissible orthogonal dual; a general mesh needs a declared
-  metric discretization. Inverses and signs must be specified, not inferred from
-  shared placement. See [Hirani's DEC thesis, §§3.6 and 4.1](https://hirani.web.illinois.edu/papers/Hirani2003_PhD_Caltech.pdf).
-- **Horizontal operators below use n=2 at each vertical level** and preserve
-  `Full`/`Half`. Full product differentiation on `H × K` has n=3 and
-  `d = d_H + (-1)^k d_K` on horizontal degree k; it produces horizontal and
-  vertical components and changes vertical staggering. It is a separate API,
-  not an implicit meaning of the horizontal `d`. Scans and column solves remain
-  orthogonal primitives.
+Mathematically write these spaces `C_P^k(H)` and `C_D^k(H)` on a horizontal
+complex `H`. The Python families are `Primal[Literal[0]]`, `Dual[Literal[1]]`,
+etc.; raw `Dual[1]` is only mathematical shorthand, not a Python value parameter.
+A core field uses `Field[At[Dual[Literal[1]], Full, Integrated], float]`, retaining
+vertical staggering separately. `Integrated` names a cochain DOF: exact continuous
+integration may be replaced by a declared numerical quadrature when constructing it.
+
+Topology and metric have different signatures on a validated n-complex:
+
+```text
+d_P^k : C_P^k -> C_P^(k+1)       d_D^k : C_D^k -> C_D^(k+1)
+star_P^k : C_P^k -> C_D^(n-k)    star_D^k : C_D^k -> C_P^(n-k)
+```
+
+`d` is the signed coboundary on one side. A diagonal circumcentric `star` uses
+primal/dual measure ratios on an admissible orthogonal dual; a general mesh needs
+a declared metric discretization. Inverses and orientation signs are part of that
+contract, not inferred from storage. See [Hirani, §§3.6 and 4.1](https://hirani.web.illinois.edu/papers/Hirani2003_PhD_Caltech.pdf).
+A Hodge result of degree zero is an algebraic coefficient; interpreting it as a
+continuum point sample still requires the facade's sampling contract.
+
+Finite overloads express supported transitions without type-level arithmetic.
+For example, these are **stub signatures** for the horizontal dual complex:
+
+```python
+from typing import Literal, overload
+
+D0 = Field[At[Dual[Literal[0]], Full, Integrated], float]
+D1 = Field[At[Dual[Literal[1]], Full, Integrated], float]
+D2 = Field[At[Dual[Literal[2]], Full, Integrated], float]
+
+@overload
+def d(f: D0) -> D1: ...
+@overload
+def d(f: D1) -> D2: ...
+```
+
+Generate analogous signatures per supported side/degree and vertical staggering,
+plus `star` transitions. Both pinned checkers accept this bounded D0 → D1 → D2
+encoding and reject wrong-side calls. This demonstrates signatures, not arbitrary
+inference or an implemented operator. The terminal `d` into a zero space can be
+omitted from the API; its mathematical existence is unchanged.
+
+On a structured 2-D box, each side's degree-1 space has two directional edge
+blocks. Product incidences lower to fixed index shifts; general complexes lower
+to signed tables. This directional split is independent of both primal/dual side
+and normal/tangential quantity.
+
+### Located facade and conversion contracts
+
+`At[CellScalar, Full, Point]` names placement, vertical staggering and sampling.
+`EdgeNormal`, `EdgeTangential` and `EdgeScalar` distinguish quantities at the same
+edge. `Point`, `CellMean` and `DualEdgeMean` distinguish representations; the facade
+retains those tags through its named conversions and lowering. Side/degree alone
+cannot authorize a relabelling of physical quantity or sampling.
+
+Integrating a continuous scalar onto a 0-cell means evaluating it at that point;
+a cell average stored at the same cell centre does not become such a point value
+without reconstruction. Multiplying an exact mean by its integration measure gives
+an integral; multiplying an arbitrary point sample by measure chooses a quadrature.
+For example, on `[-1,1]`, the midpoint sample of `x²` times length is 0 while its
+integral is 2/3. Similarly, a pressure difference of `x³` divided by length is the
+mean derivative 1, while its midpoint derivative is 0. No generic `sample` or
+`integrate` operation may erase these distinctions.
+
+The operators below use **horizontal n=2 at each vertical level**, preserving
+`Full`/`Half`. Full product differentiation on `H × K` has n=3 and
+`d = d_H + (-1)^k d_K` on horizontal degree k: it produces horizontal/vertical
+components and changes vertical staggering. It is a separate API, not an implicit
+meaning of horizontal `d`. Scans and column solves remain orthogonal primitives.
 
 For a horizontal C-grid with orthogonal primal/dual edges, fix a tangent `t_e` on
 each primal edge and a normal `n_e` pointing to the right of `t_e` in the oriented
@@ -660,23 +729,28 @@ values leaves these contracts unspecified. Nor can `d_P` take primal degree-2 ce
 pressure to edges. The signatures above deliberately state which cochain is used.
 A vertex-located curl instead needs the corresponding dual-face circulation
 representation and reconstruction; `EdgeTangential` alone does not select it.
+In particular, both normal **flux** and tangential **circulation** above are primal
+1-cochains. Their shared side/degree does not make them the same quantity. A
+staggering declaration chooses DOFs and conversions; N/T is not intrinsically a
+primal/dual classification.
 
-On a structured 2-D box, primal 1-cochains have two directional edge blocks;
-normal flux and tangential circulation each use those blocks with different
-quantity semantics. The same surface can resolve to array shifts or unstructured
-tables without erasing that distinction. Sparse incidence fields are Σ types
-(`Field[At[Incidence[Cell, Edge]]]`); the mesh supplies an enumeration bijection
-— incidence rows are duplicate-free, the injective case of A's `Pairs[R]` — so
-slot dimensions can remain hidden.
+Normal flux and tangential circulation each use the structured directional blocks
+with different quantity semantics. The facade resolves to the same cochain core
+on a box or an unstructured mesh. Sparse incidence fields are endpoint Σ types
+(`Incidence[Cell, Edge]`, the ideal's `Incid`); their enumeration is bijective with
+A's valid-slot `Pairs[R]` in this duplicate-free case. Ordered path stencils with
+repeats retain occurrence identity instead.
 
 ### Topological boundary and semantic regions
 
-Assume an oriented manifold cell complex with a validated boundary subcomplex
-`∂g` (and a declared dual construction). Non-manifold input requires a separate
-boundary/dual policy. Primal boundary and coboundary maps are **total on the finite
-complex**, including its boundary: a single triangle has all three edges and
-`d_P^1 d_P^0 = 0`. Missing *exterior neighbours* affect adjacency, dual completion
-and composed stencils, not the existence of that triangle's incidence map.
+Assume an oriented regular manifold cell complex with a validated boundary
+subcomplex `∂g` and a declared dual construction. Non-manifold or non-regular input
+requires a separate incidence/boundary/dual policy. Primal boundary and coboundary
+maps are **total on the finite complex**, including its boundary: a single triangle
+has all three edges and `d_P^1 d_P^0 = 0`. A boundary edge's coface list is complete
+with one cell; a two-slot `E2C` representation has a missing slot, and a two-sided
+or composed stencil may need an exterior cell. These affect adjacency and dual
+completion, not the existence of the finite incidence map.
 
 Boundary conditions supply the traces/ghost values and geometry an operator
 actually needs. A flux divergence needs boundary-edge flux; a two-sided
@@ -714,11 +788,12 @@ def grad_n(p: Field[At[CellScalar, Full, Point], float],
     return edge_normal_average(dp)                     # divide by dual_edge_length
 ```
 
-`Point`, `CellMean` and `DualEdgeMean` are distinct sampling markers. Here `p` and
-`vn` are point samples, `vn` uses the declared edge quadrature, and `pressure_bc`
-provides the boundary completion required by that mesh. These convenience operators
-are not arbitrary `d` over placements. Their geometry/quadrature choices and any
-conversion back from means to point samples belong to the schema contract.
+Here `as_dual0(p)` returns core D0; `integrate_normal_flux` constructs a primal
+1-cochain under the declared edge quadrature. `d_primal` and `d_dual` are
+side-specific wrappers around core `d`, with the latter applying the declared
+pressure boundary completion. `cell_average` and `edge_normal_average` return the
+facade's tagged means, not point samples. Geometry, quadrature and any subsequent
+mean-to-point reconstruction belong to the schema contract.
 
 ### Dependent-typing reading and guarantees
 
@@ -743,6 +818,10 @@ with explicit reconstructions, without automatically inheriting the identities.
 
 - **Develops** the FD-syntax note's location typing and `EDGE_N`/`EDGE_T`/`EDGE`
   distinction, making its shorthand de Rham formulas representation-specific.
+  Its §6.4–6.5 convention calls the CELL → EDGE_N → VERTEX sequence primal;
+  relative to our stored-mesh convention its paired support is dual 0 → 1 → 2.
+  This is a naming/support map, not a proof of component, sampling or C/D guarantees.
+  The directional/component conflict is detailed under [Conflicts](#relation-to-other-notes-and-conflicts).
 - **Unifies** UGRID entity placement and SGRID product staggering through complex
   schemas, using `Staggered[D]` for per-axis classes. This extends the
   [[personal/egparedes/connectivities-as-types/connectivities-as-types_conventions|conventions appendix]];
@@ -760,6 +839,8 @@ with explicit reconstructions, without automatically inheriting the identities.
 
 **Costs:**
 - All of B's backend burden, plus representation/quantity typing and metric validation.
+- Core authors must choose side/degree; facade authors must supply the associated
+  conversion and sampling contracts.
 - ICON's ordered non-canonical stencils (`E2C2V` for RBF, `C2E2C2E2C`) need escape hatches.
 - Boundary completion and reconstructions require separate numerical validation.
 - The location/cochain algebra needs bounded generated overloads; geometry is part
@@ -770,7 +851,7 @@ with explicit reconstructions, without automatically inheriting the identities.
 | | A | B | C |
 | --- | --- | --- | --- |
 | **Semantics** | **local (SPMD)** | **global** | **global** |
-| Center of gravity | algebra of index spaces | data model | user surface |
+| Center of gravity | algebra of index spaces | data model | cochain core with a located-field facade |
 | Decomposition visible in source | `Owned`, exchange points, `global_sum` | nothing | nothing |
 | Halo support | given/derived; required footprints checked | derived or given; never source | as B |
 | Exchange placement | explicit depth-free points, or per-program `auto` | automatic | automatic |
@@ -795,9 +876,9 @@ therefore coexist as **levels of one stack**, each lowering to the one below. Ea
 level is useful on its own, and none forces the levels above it.
 
 ```text
- L3  surface    C: located fields, mesh-invariant operators              global semantics
-       │  canonical incidences → named relations of the schema;
-       │  star / weights → geometry fields; Boundary[L] → boundary regions
+ L3  surface    C: located facade → typed cochain core                   global semantics
+       │  quantity/sampling conversions; d → signed relations;
+       │  star / quadrature → geometry operators; boundary policies → traces / extensions
  L2  model      B: logical mesh, fields with a mesh, semantic regions     global semantics
        │  + Distribution: one local binding per rank; regions → Owned ∩ local index sets;
        │  inferred halo validity → exchanges or redundant computation; global sums → local + allreduce
@@ -811,7 +892,7 @@ level is useful on its own, and none forces the levels above it.
 
 | From → to | Lowering steps | Obligation |
 | --- | --- | --- |
-| **L3 → L2** | Resolve placement, quantity, side, degree and representation to signed relations and conversions. `star`, measures and quadrature become geometry operators/fields. Boundary policies become trace/ghost operations or restricted domains; masks can use `concat_where`. Product incidences lower to shifts and directional field tuples. | Same discrete operator, including boundary completion. Compare with hand-written stencils and check incidence/metric identities separately. |
+| **L3 → L2** | The facade lowers through explicit conversions to the cochain core: dual d0 uses signed `E2C`, primal d1 uses signed `C2E`. Preserve quantity/sampling contracts. `star`, measures and quadrature become geometry operators/fields. Boundary policies become trace/ghost operations or restricted domains; masks can use `concat_where`. Product incidences lower to shifts and directional field tuples. | Same discrete operator, including boundary completion. Compare with hand-written stencils and check incidence/metric identities separately. |
 | **L2 → L1** | Build rank bindings and intersect semantic regions with `Owned`. Check support coverage and initialized regions/generations; schedule exchanges or valid redundant computation. Split global reductions into owned local partials and a collective under the chosen reproducibility policy. Preserve the logical-mesh brand. | **Simulation condition** on valid owned values: compare trivial and nontrivial distributions bitwise for the strict subset; separately check non-reproducible collectives and all their data/control dependants under the declared policy. |
 | **L1 → L0** | Relations become bound tables; slot/incidence spaces become local dimensions. Emit a host execution plan containing GTIR kernel calls, communication hooks, host collectives and scalar returns. | Today's kernel lowering can remain unchanged; the host-plan layer is proposed work, not existing whole-program GTIR support. |
 
@@ -828,11 +909,17 @@ therefore keeps today's kernel code path on a single node.
    `Dims[Face[M], K]` with its quantity/representation contract. Surface names can
    differ, but aliases/mappings resolve to canonical objects and diagnostics show
    the mapping; no safety check relies on strings coincidentally agreeing.
+   Core `At[Dual[Literal[0]], Full, Integrated]` also uses `Dims[Face[M], K]`,
+   but shared storage does not identify it with every facade field on those cells.
 2. **Semantics is a property of a program, not of a field operator.**
    - The shared *pure, neighbourhood-local* operator subset is semantics-neutral
      when logical boundary interpretation, ordered stencils and arithmetic policy
      agree, and all inputs are valid. Operators depending on rank-local state or
      on collective results are outside that unconditional claim.
+   - Reductions over distributed dimensions are **program-only**: `global_sum`
+     in L1, global `sum_over` in L2/L3. They cannot appear inside field operators.
+     Local neighbour-slot reductions and scans on undistributed axes remain valid
+     field-operator primitives.
    - A library of that subset serves L1 and L2, with collectives placed in the
      host program plan. Programs (domains, communication, global reductions) are
      global (`@program`) or local
@@ -972,7 +1059,7 @@ These hold whichever direction is chosen.
    - Closed: the mesh proposal and MPAS argue for V/E/C and canonical relations.
    - Open: ICON4Py's ordered multi-hop tables argue for an algebra.
 6. **Halo-validity typestate**: is a static owned-valid / halo-valid distinction
-   worth its annotation cost in A?
+   worth its annotation cost in A, alongside the required valid regions/generations?
 
 ## Relation to other notes and conflicts
 
@@ -1009,17 +1096,27 @@ These hold whichever direction is chosen.
   A adopts its forest, including `Local[C, P]` ancestry and reparenting as
   `Slot[R, Parent]`, rather than the path-only `Local[C]` spelling.
 - [[personal/havogt/dimension-generic-fields/dimension-generic-fields|Generic dimensions and staggering]]:
-  dimension genericity is a prerequisite (decision 10). Its `Dual[X]` name is
-  reserved here for the full Hodge dual (C's `star`), as the connectivities
-  staggering appendix argues.
+  dimension genericity is a prerequisite (decision 10). Its per-axis `Dual[X]`
+  name conflicts with C's `Dual[...]` cochain-side family. Here the axis
+  involution is `Staggered[X]` and the Hodge map is `star`, following the
+  staggering appendix's separation of axis staggering and full duality.
 - [[personal/egparedes/discretization-independent-fd-syntax|Discretization-independent FD syntax]]:
   C develops its Proposal 3 and the §7.1 component distinctions. **Qualification**:
   its shorthand `d0` / `star d star` and C/D guarantees need the explicit side,
   representation and boundary contracts above. Its "halo exchange is never written
-  by the user" is global semantics.
+  by the user" is global semantics. Its §6.4–6.5 primal naming for the
+  `P(0)=CELL`, `P(1)=EDGE_N`, `P(2)=VERTEX` placement corresponds to dual support
+  in our stored-mesh convention; this correspondence does not identify N/T with
+  side, or make C/D identities automatic.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|Staggering appendix]]:
-  physical vertical geometry is logical; scan/layout roles belong to programs and
-  distribution to decompositions. Its §7 item 6 needs the qualification in decision 9.
+  **Conflict in §1**: it identifies structured directional edge families with the
+  `EDGE_N`/`EDGE_T` component distinction. FD-syntax §3.3 links its directional
+  bit vector indirectly to the two edge families of §6.4; §7.1 explicitly defines
+  N/T as normal/tangential physical components. Directional block, quantity and
+  primal/dual side are independent choices: both normal flux and tangential
+  circulation can be primal 1-cochains under C's convention. Physical vertical
+  geometry is logical; scan/layout roles belong to programs and distribution to
+  decompositions. Its §7 item 6 needs the qualification in decision 9.
 - **Open PRs**:
   - [GridTools/gt4py_knowledge#31](https://github.com/GridTools/gt4py_knowledge/pull/31)
     (a default domain plus per-output restrictions) restricts outputs with zone

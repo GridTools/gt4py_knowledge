@@ -51,8 +51,16 @@ status: draft
 | [[personal/havogt/boundary-condition-syntax/boundary-condition-syntax\|Boundary-condition syntax]] | Domains as conditions (`concat_where`); region literals `K[0]`, `K[1:nlev]`; restriction as decomposition. | ICON4Py horizontal conditions use named index symbols that mix boundary and halo bounds. `Domain.__bool__` must raise. |
 | [[personal/havogt/scan-redesign/scan-redesign\|Scan redesign]] | Anchored vertical ranges (`KDim.start`/`KDim.stop`). Forward-anchored vertical domain inference. Static vertical windows as compile-time connectivities. | The vertical is never distributed. Half levels (n+1) are staggering. Bare negative indices are not allowed. |
 | [[personal/havogt/dtype-generic-fields/dtype-generic-fields\|Dtype-generic fields]] | Declare statically, bind at call time, monomorphize at FOAST (two-level type theory). | Strict: exact match or error, no promotion. |
-| [[personal/egparedes/discretization-independent-fd-syntax\|Discretization-independent FD syntax]] | Gather–weight–reduce normal form. Location typing, with distinct `EDGE_N`, `EDGE_T`, `EDGE` quantities. Mesh as a partial-evaluation input. | C/D structural guarantees require compatible cochain representations/operators, qualified in main C. The vertical and limiters need escape hatches. "Halo exchange is never written by the user". |
+| [[personal/egparedes/discretization-independent-fd-syntax\|Discretization-independent FD syntax]] | Gather–weight–reduce normal form, a declared placement/operator family, and distinct `EDGE_N`, `EDGE_T`, `EDGE` quantities. Main C connects this facade to an explicit side/degree cochain core. | C/D guarantees require compatible representations, conversions and boundaries. Its §6.4–6.5 primal naming differs from the stored-mesh convention; see main C and conflicts. The vertical and limiters need escape hatches. |
 | [[knowledge/software-engineering/principles\|Working principles]] | Deep modules, DRY, making implicit concepts explicit, bounded contexts and anticorruption layers. | Red flags: information leakage, buried rules, unexamined constraints. |
+
+Two source distinctions require care: the
+[[personal/egparedes/connectivities-as-types/connectivities-as-types_staggering|staggering appendix]]
+§1 conflates directional edge families with physical N/T components; FD-syntax
+§3.3 links the families indirectly, whereas §7.1 defines N/T explicitly.
+The main note separates direction, quantity, side/degree and sampling. Its core
+`Primal[Literal[0]]` / `Dual[Literal[1]]` families use concrete literal degrees;
+point, mean and integrated representations still require explicit conversions.
 
 Related work still in open PRs at the time of writing:
 - [GridTools/gt4py_knowledge#31](https://github.com/GridTools/gt4py_knowledge/pull/31):
