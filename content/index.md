@@ -47,6 +47,10 @@ Work-in-progress proposals, organized by contributor.
 - [[personal/egparedes/connectivities-as-types/connectivities-as-types|Connectivities as types: one declaration for offset, local dimension and provider key]] — keywords: type-system, type-checking, dimensions, local-dimensions, connectivities, offset-provider, unstructured, neighbor-sum, reduction, frontend, foast, gtir, embedded, gtfn, dace, nominal-types, dependent-types, metaclass, serialization, fingerprint, staggering, axis-dimensions, cw-complex, exterior-calculus, domain, dimension-kind, ugrid, sgrid, migration, adr, tech-debt, shared-local-dimensions, implemented
 - [[personal/egparedes/discretization-independent-fd-syntax|A discretization-independent surface syntax for finite-difference computations]] — keywords: finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, cw-complex, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, pace, pmap, fv3, ifs-fvm, arakawa-staggering, c-grid, d-grid, a-grid, dynamical-core, hevi, vertical-solve, elliptic-solve, mpdata, semi-implicit, miura, atlas, prior-art, dsl-design
 
+### tehrengruber
+
+- [[personal/tehrengruber/scan-design/scan-redesign|Redesign of the vertical scan: pattern catalog]] — keywords: scan, vertical, reduction, boundary-conditions, windows, k-caches, fusion, embedded, jax, frontend, patterns, tridiagonal, sedimentation, migration
+
 <!-- Entry format (index only the main proposal; link appendices/implementations
      from within the proposal document itself, not here):
 - [[personal/havogt/<slug>|Title]] — keywords: keyword1, keyword2
