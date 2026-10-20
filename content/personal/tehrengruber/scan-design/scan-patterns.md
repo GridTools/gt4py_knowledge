@@ -38,6 +38,8 @@ status: draft
   [[personal/havogt/scan-redesign/scan-redesign_examples|worked examples]]
   (prior art, the sedimentation case study, the muphys analysis).
 
+TODO: Where the scan computes is currently undefined. We should add pattern where the output is only defined on a subset of the domain that is different to the input.
+
 ## How to read this catalog
 
 **Minimal form.** Each pattern is given as a NumPy function over **one
@@ -100,7 +102,7 @@ new on at least one of them.
 | [C1](#c1) | Boundary rows: start/end-anchored regions          | + counter              | —         | PMAP stride-2 (5 regions), `_solve_itcs`      |
 | [C2](#c2) | Init from outside the column                       | field-valued init      | —         | `diagnose_pressure`, surface BCs              |
 | [C3](#c3) | Data-dependent start level                         | flag + index           | per level | radiation `i_cloud_top` (×4)                  |
-| [D1](#d1) | Bounded window sub-reduce, no state                | none (window only)     | per level | COSMO boxtracking, PPM                        |
+| [D1](#d1) | Bounded window sub-reduce, no state                | none (window only)     | per level | COSMO boxtracking                             |
 | [D2](#d2) | Bounded window inside a recurrence                 | state + $M$ ring slots | per level | precip-flux schemes                           |
 | [E1](#e1) | Recurrence under an extra data dimension           | ×G                     | per level | radiation g-points ($O(100)$)                 |
 | [X1](#x1) | $O(K^2)$ double loop, multi-level writes, feedback | —                      | —         | SHiELD melting                                |
@@ -435,8 +437,7 @@ semantics; and any cumulative quantity in the window
 (geometric height from `dz`) is a separate [A1](#a1) accumulation composed in front.
 
 References: the two-moment "boxtracking" sedimentation (eq. 12; tuple-valued
-$\phi$: mass *and* number density) [cosmo/1]; the PPM reconstruction in
-`ppm/common/cell_face_values.py` [pmap/dycore/9]; the asymptotic-mixing-length
+$\phi$: mass *and* number density) [cosmo/1]; the asymptotic-mixing-length
 walk — per level a *runtime*-bounded window sub-reduce, beyond D1's static
 bound (worst case $O(K^2)$) [pace/shield/11].
 
@@ -716,7 +717,6 @@ and cite one exemplar per family — the sweep found 161 true scans among 389
 - [pmap/dycore/6] — `_cloud_cover_maximum(_random)` (`operators/cloud_cover.py`)
 - [pmap/dycore/7] — `_cloud_base_height` and the other level searches
 - [pmap/dycore/8] — `_boundary_layer_height`
-- [pmap/dycore/9] — PPM `_cell_face_values_z_4th`
 - [pmap/dycore/10] — the `precompilation` branch the scan ports target — its pinned HEAD still carries the pre-port TODOs; the validated ports are not pushed yet
 - [pmap/dycore/11] — `_solve_itcs`, the terrain-following variant (`diffusion/scalar_z.py`)
 - [pmap/dycore/12] — `_solve_itcs`, three coupled systems (`diffusion/vector.py`)
@@ -818,7 +818,6 @@ and cite one exemplar per family — the sweep found 161 true scans among 389
 [pmap/dycore/6]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/operators/cloud_cover.py#L195
 [pmap/dycore/7]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/operators/cloud_cover.py#L248
 [pmap/dycore/8]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/diagnostics/boundary_layer_height.py#L87
-[pmap/dycore/9]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/ppm/common/cell_face_values.py#L319
 [pmap/dycore/10]: https://github.com/PMAP-Project/PMAP/tree/fbdad0b0fa4cc9fccd1cc180ea2460e4935f7d63
 [pmap/microphysics/1]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/physics/cloud_microphysics/cloudsc/cy49r1/_stencils/cloudsc_cy49r1.py#L380
 [pmap/microphysics/2]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/physics/cloud_microphysics/diagnostics.py#L18
