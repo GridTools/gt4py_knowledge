@@ -6,7 +6,7 @@ created: 2026-10-22
 status: draft
 ---
 
-> **Snapshot context.** Appendix to [[personal/egparedes/next-dsl-documentation/next-dsl-documentation|the documentation proposal and generation process]].
+> **Snapshot context.** Appendix to [[personal/egparedes/next-dsl-documentation/next-dsl-documentation|the documentation proposal and method]].
 > The reviewed source body follows in full. This personal draft records the stated
 > GT4Py revision; it is not an accepted normative standard. Migration adds this
 > frontmatter/context, relocates evidence links to immutable source URLs, and uses

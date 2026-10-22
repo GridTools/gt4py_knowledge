@@ -1,5 +1,5 @@
 ---
-title: "GT4Py Next DSL documentation: specification snapshot and generation process"
+title: "GT4Py Next DSL documentation: specification snapshot and documentation method"
 author: egparedes
 tags: [documentation, dsl, public-api, frontend, type-system, fields, domain, dimensions, connectivities, field-operators, scan, embedded, validation, provenance]
 created: 2026-10-22
