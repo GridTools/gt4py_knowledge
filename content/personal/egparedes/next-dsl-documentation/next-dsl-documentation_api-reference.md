@@ -6,14 +6,10 @@ created: 2026-10-22
 status: draft
 ---
 
-> **Snapshot context.** Appendix to [[personal/egparedes/next-dsl-documentation/next-dsl-documentation|the documentation proposal and method]].
-> The reviewed source body follows in full. This personal draft records the stated
-> GT4Py revision; it is not an accepted normative standard. Migration adds this
-> frontmatter/context, relocates evidence links to immutable source URLs, and uses
-> knowledge-base wikilinks for companion documents. Technical claims are preserved.
->
-> **Known corrections.** Read [[personal/egparedes/next-dsl-documentation/next-dsl-documentation#errata-for-this-baseline|baseline errata]] first.
-> The text below is a preserved snapshot; the errata take precedence.
+> **Context.** Appendix to [[personal/egparedes/next-dsl-documentation/next-dsl-documentation|the documentation proposal]].
+> This personal draft describes GT4Py `main` at
+> [`f3b3ab28`](https://github.com/GridTools/gt4py/tree/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f);
+> it is not an accepted normative standard.
 
 # gt4py.next DSL API reference
 
@@ -69,6 +65,13 @@ and constants have separate resolution rules.
 `as_offset` and `concat_where` are available from
 `gt4py.next.ffront.experimental`. Python allocation, object construction,
 backend selection, and compilation control occur outside captured bodies.
+
+This page does not inventory every package export. The
+[public exports](https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/__init__.py) also include the host utilities
+`Device`, `DeviceType`, `CUPY_DEVICE_TYPE`, and `is_scalar_type`, and the
+`program_processors` submodule; they are outside this reference, see the
+[core definitions](https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/_core/definitions.py). Constructor `device=`
+parameters take `Device` values.
 
 ### Signatures and type notation
 
@@ -236,9 +239,10 @@ Cartesian remappings. Dimension/index comparisons form coordinate regions for
 
 The enumeration members are `HORIZONTAL`, `LOCAL`, and `VERTICAL`.
 Canonical field dimension order is horizontal, local, vertical, then
-lexicographic base name within each kind. Field/DSL checks reject duplicate
-dimensions, multiple local dimensions, and a base dimension together with its
-staggered counterpart. Host `Domain` construction has weaker checks.
+lexicographic base name within each kind. Field/DSL checks reject noncanonical
+order, duplicate dimensions, multiple local dimensions, and a base dimension
+together with its staggered counterpart. Host `Domain` construction has weaker
+checks.
 
 ### Dims
 
@@ -250,6 +254,9 @@ Field[Dims[()], float64]
 Supplies the ordered dimensions of a field annotation. `Dims[()]` denotes a
 zero-dimensional field. The legacy spelling `Field[[I, J, K], float64]` also
 appears in the API. Bounds are runtime properties, not annotation parameters.
+Dimensions must be listed in [canonical order](#dimensionkind): with horizontal
+`I` and vertical `K`, `Dims[K, I]` raises `InvalidAnnotationError` at
+decoration; it is not reordered.
 
 ### UnitRange and unit_range
 
@@ -283,7 +290,8 @@ sequences; for example `domain({I: (0, 8), K: range(2, 5)})`.
 
 **Returns.** An ordered product of named unit ranges. `.dims`, `.ranges`,
 `.shape`, and `.ndim` expose its layout and extents. A domain with no axes has
-one empty coordinate; any empty constituent interval makes a domain empty.
+exactly one coordinate, the empty tuple `()`, and is not empty; any empty
+constituent interval makes a domain empty.
 
 **Operations.** Domain intersection aligns dimensions and intersects shared
 ranges. A missing dimension is treated as unbounded. Domains use absolute
@@ -921,8 +929,9 @@ power(lhs: Number, rhs: Number, /) -> Number
 **Returns.** The first operand raised to the second operand. The result has the common dtype
 and merged field dimensions on the common domain; two scalar inputs give a scalar.
 
-**Current limitations.** Integral operands emit a frontend warning about result-type
-consistency. This function uses ordinary matching-dtype promotion, unlike the
+**Current limitations.** With integral operands, frontend type deduction prints a
+result-type consistency diagnostic to standard output; it is not a Python warning
+and cannot be filtered as one. This function uses ordinary matching-dtype promotion, unlike the
 `**` operator's special base-type result rule.
 
 **Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c5--versus-ordinary-promotion-and-power|C5]]).** `power` requires matching dtypes and promotes dimensions normally. The base-type rule and mixed scalar exponent case of `**` do not extend to this function.
@@ -1185,8 +1194,10 @@ field(I + n) -> Field
 field(I - n) -> Field
 ```
 
-**Parameters.** `I` is the result dimension and `n` is a fixed literal
-(or a closure-folded literal) displacement. Integral displacement reads the
+**Parameters.** `I` is the result dimension and `n` is a fixed displacement:
+an inline literal, or an attribute of a `FrozenNamespace` or `Enum` constant
+namespace that closure folding replaces with a literal. A plain captured integer
+such as `SHIFT = 1` is rejected. Integral displacement reads the
 same dimension; half-integral displacement reads its staggered counterpart.
 A runtime displacement field uses [as_offset](#as_offset).
 
@@ -1390,7 +1401,9 @@ Lifts a scalar recurrence over columns of a vertical dimension.
 **Parameters.** `axis` has kind `VERTICAL`. `forward=True` traverses increasing
 indices; `False` traverses decreasing indices. `init` is the initial carry.
 The definition's first parameter is the carry; its type, the return type, and
-`init` agree exactly. Carry values may be scalar or supported scalar products.
+`init` agree exactly. The default `init=0.0` therefore fits only a scalar
+`float64` carry; integer, differently typed, or product carries need an explicit
+compatible `init`. Carry values may be scalar or supported scalar products.
 The remaining parameters receive the per-point input values.
 
 **Returns.** A scan operator using the field-operator invocation protocol.
@@ -1502,7 +1515,9 @@ np.testing.assert_array_equal(out.asnumpy(), [-1.0, 4.0, 6.0, -1.0])
 
 | Form                                                                                                             | Field/scan operator body                                                  | Program body                        |
 | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------- |
-| Local assignment, annotation, tuple unpacking                                                                    | Supported; value bindings, no field stores                                | Not supported                       |
+| Local assignment, tuple unpacking                                                                                | Supported; value bindings, no field stores                                | Not supported                       |
+| Local annotated assignment                                                                                       | Partial: builtin scalar annotations only                                  | Not supported                       |
+| Chained assignment `b = c = a`                                                                                   | Not supported; fails at decoration                                        | Not supported                       |
 | `return expression`                                                                                              | Required on all reachable paths; common return type                       | No value return                     |
 | `if`/`elif`/`else`, conditional expression                                                                       | Scalar bool condition; branches statically checked; matching result types | Not supported                       |
 | Elementwise conditional                                                                                          | `where` with bool Field mask                                              | Put in a field operator             |
@@ -1515,6 +1530,9 @@ np.testing.assert_array_equal(out.asnumpy(), [-1.0, 4.0, 6.0, -1.0])
 Zero-dimensional bool fields are fields and cannot control `if`. Locals after
 branches must be valid on the relevant paths according to binding/type analysis.
 Docstrings are removed during parsing; `pass` is a no-op in field-operator bodies.
+Local annotations are evaluated only against DSL builtins and captured closure
+variables, so `Dims`, a `gtx.` prefix, or a dimension used only in the annotation
+can raise `NameError` at decoration; prefer inferred bindings.
 The [[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#21-abstract-grammar|formal grammar]] describes the
 supported subset in more detail.
 
@@ -1542,15 +1560,15 @@ becomes an empty mapping; an explicitly supplied operator provider must be a
 mapping, so `None` is not equivalent. `enable_jit` overrides whether a missing
 compiled variant may be created, otherwise following configured options.
 
-**Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c21-captured-type-rules-versus-embedded-host-call-validation|C21]]).** Matching argument and output types are caller obligations. Direct field-level embedded operator calls bypass some runtime type checks and can execute invalid calls or cast on assignment; this is not a supported coercion API.
-
-**Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c22-omitted-versus-explicit-none-operator-domains|C22]]).** Omit `domain` to infer writes from outputs. Explicit `domain=None` acts like omission only in field-level embedded execution; compiled operator host calls reject it during domain conversion.
-
 **Returns.** `None` for output-writing calls. Expression calls inside another
 operator return the DSL value and inherit the enclosing execution context.
 Host operator calls require `out` even in embedded mode.
 
 **Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c1-historical-frontenddomain-api-versus-the-accepted-api|C1]], [[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c4-offset-provider-values-and-optionality|C4]]).** Host calls require `out` and permit explicit `domain=`. An omitted provider means `{}`; an explicitly supplied provider must be a mapping. The historical mandatory-provider and domain-prohibition descriptions are not used.
+
+**Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c21-captured-type-rules-versus-embedded-host-call-validation|C21]]).** Matching argument and output types are caller obligations. Direct field-level embedded operator calls bypass some runtime type checks and can execute invalid calls or cast on assignment; this is not a supported coercion API.
+
+**Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c22-omitted-versus-explicit-none-operator-domains|C22]]).** Omit `domain` to infer writes from outputs. Explicit `domain=None` acts like omission only in field-level embedded execution; compiled operator host calls reject it during domain conversion.
 
 ### Program calls
 
@@ -1659,10 +1677,10 @@ entry.with_compilation_options(**compilation_options) -> configured copy
 | `static_domains: bool`           | Specialize field bounds; default false                                                       |
 | `connectivities: OffsetProvider` | Connectivity configuration available to compilation workflows                                |
 
-**Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c20-compilation-annotations-versus-executable-precompilation|C20]]).** For explicit compilation, configured connectivities must supply runtime neighbor tables (or `{}` when none are needed). Nonempty provider-type-only mappings are rejected despite broader annotations.
-
 **Returns.** A configured copy. These options affect staging/execution; they
 do not add DSL syntax or change an expression's defined mathematical value.
+
+**Interpretation used ([[personal/egparedes/next-dsl-documentation/next-dsl-documentation_specification#c20-compilation-annotations-versus-executable-precompilation|C20]]).** For explicit compilation, configured connectivities must supply runtime neighbor tables (or `{}` when none are needed). Nonempty provider-type-only mappings are rejected despite broader annotations.
 
 ### with_static_params
 
@@ -1785,7 +1803,10 @@ not create an arbitrary nonrectangular union.
 
 **Region expressions.** With `n` of `IndexType` (int32), `d < n`, `d <= n`,
 `d > n`, `d >= n`, and `d == n` select their corresponding integer-coordinate
-intervals. `d != n` selects a complement with a gap and has embedded limitations.
+intervals. `d != n` selects a complement with a gap and is frontend syntax with
+backend-specific support: field-level embedded execution raises
+`NotImplementedError` when evaluating the condition, before `concat_where` runs.
+Use `concat_where(d < n, t, concat_where(d > n, t, f))` for the same selection.
 Chained comparisons are rejected; parenthesized region combinations have
 frontend typing but not uniform execution support.
 

@@ -6,14 +6,10 @@ created: 2026-10-22
 status: draft
 ---
 
-> **Snapshot context.** Appendix to [[personal/egparedes/next-dsl-documentation/next-dsl-documentation|the documentation proposal and method]].
-> The reviewed source body follows in full. This personal draft records the stated
-> GT4Py revision; it is not an accepted normative standard. Migration adds this
-> frontmatter/context, relocates evidence links to immutable source URLs, and uses
-> knowledge-base wikilinks for companion documents. Technical claims are preserved.
->
-> **Known corrections.** Read [[personal/egparedes/next-dsl-documentation/next-dsl-documentation#errata-for-this-baseline|baseline errata]] first.
-> The text below is a preserved snapshot; the errata take precedence.
+> **Context.** Appendix to [[personal/egparedes/next-dsl-documentation/next-dsl-documentation|the documentation proposal]].
+> This personal draft describes GT4Py `main` at
+> [`f3b3ab28`](https://github.com/GridTools/gt4py/tree/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f);
+> it is not an accepted normative standard.
 
 # gt4py.next computation DSL specification
 
@@ -69,8 +65,11 @@ neighbor slots; a vertical dimension may carry a sequential scan.
 Canonical field dimension order groups horizontal, local, then vertical
 axes, ordering base names lexicographically within a group. Dimension promotion
 merges compatible dimension sequences into this order. Field/DSL dimension
-checks reject duplicates, more than one local dimension, and coexistence of a
-base dimension and its staggered counterpart. A host `Domain` object has weaker
+checks reject noncanonical order, duplicates, more than one local dimension, and
+coexistence of a base dimension and its staggered counterpart. A field annotation
+must already list its dimensions in canonical order: for horizontal `I` and
+vertical `K`, `Field[Dims[K, I], τ]` raises `InvalidAnnotationError` at
+decoration, and promotion does not reorder it. A host `Domain` object has weaker
 construction checks and is not proof that a field annotation is admissible.
 
 For non-staggered `d`, `flip_staggered(d)` represents locations half a cell below
@@ -87,7 +86,8 @@ user does not select a grid type, the frontend deduces it from referenced
 dimensions, offsets, and operators.
 
 Evidence: [data model][model] (`Dimension`, `order_dimensions`, `check_dims`,
-`promote_dims`, stagger helpers), [grid deduction][transform],
+`promote_dims`, stagger helpers), grid deduction in [program lowering][p-lowering]
+using [transform utilities][transform],
 [dimension tests][dimension-tests], [staggered tests][staggered-tests], and
 [ADR 26][adr26].
 
@@ -218,7 +218,7 @@ field-suite      = { field-statement } ;
 field-statement  = assignment | conditional | "return" expression
                  | "pass" | docstring ;
 assignment       = targets [ ":" data-type ] "=" expression ;
-targets          = name | tuple-pattern | chained-name-targets ;
+targets          = name | tuple-pattern ;
 conditional      = "if" expression ":" field-suite
                    { "elif" expression ":" field-suite }
                    [ "else" ":" field-suite ] ;
@@ -240,9 +240,10 @@ program-suite    = { operator-name "(" call-arguments ","
                    "out=" output [ ", domain=" domain-spec ] ")" } ;
 output           = field-name | field-name "[" output-slices "]"
                  | output-collection ;
-domain-spec      = "{" dimension ": (" integer-expression ","
-                   integer-expression ")" { "," domain-entry } "}"
+domain-spec      = "{" domain-entry { "," domain-entry } "}"
                  | domain-tuple ;
+domain-entry     = dimension ": (" integer-expression ","
+                   integer-expression ")" ;
 ```
 
 The program production abbreviates argument ordering and a trailing comma;
@@ -269,9 +270,23 @@ Python function object: the current parsers primarily consume `ast.arguments.arg
 
 Locals bind immutable values; rebinding a name expresses a new value, not a
 mutation of field storage. The frontend converts bindings to static single
-assignment form. It supports annotated assignment, chained name assignment,
-and tuple/named-collection unpacking; a starred unpacking target receives a
-tuple. Assignment through a field subscript or object attribute is not a
+assignment form. It supports tuple/named-collection unpacking; a starred
+unpacking target receives a tuple. Chained name assignment (`b = c = a`) is not
+supported: it fails at decoration with an `AssertionError`, because the
+[single-assignment-target pass][simple-assign] creates a synthetic load without
+the source location the [dialect parser][dialect] requires. Use separate
+assignments instead.
+
+Local annotated assignment is partially supported. Builtin scalar annotations
+such as `x: float = 1.0` work, and once an annotation resolves, a mismatch with
+the assigned value is a DSL type error. The [field parser][fo-parser] evaluates
+local annotations only against the DSL builtins and captured closure variables,
+and [source capture][source] excludes names used only in annotations. `Dims`, a
+module prefix such as `gtx.`, or a dimension used only in a local annotation can
+therefore raise a raw `NameError` at decoration, even when imported at module
+level. The annotated-assignment cases in the [parser tests][fo-parser-tests] and
+[lowering tests][fo-lowering-tests] are skipped or expected to fail. Prefer
+ordinary inferred bindings. Assignment through a field subscript or object attribute is not a
 field-operator operation. Function/operator definition names cannot shadow
 reserved DSL builtin names; this explicit check does not establish a separate
 blanket prohibition on every local/parameter spelling.
@@ -472,7 +487,7 @@ The experimental functions are specified separately in section 5.
 | `sqrt`, `exp`, `log`, `gamma`, `cbrt`                   | Floating scalar/field                                                                              | Same floating type                                                                                                                                                 |
 | `floor`, `ceil`, `trunc`                                | Floating scalar/field                                                                              | Same floating dtype, rather than an integer result                                                                                                                 |
 | `isfinite`, `isinf`, `isnan`                            | Floating scalar/field                                                                              | Bool over the same dimensions                                                                                                                                      |
-| `minimum`, `maximum`, `fmod`, `power`                   | Arithmetic scalar/fields under ordinary promotion                                                  | Matching dtype over merged dimensions; integral `power` emits a result-type consistency warning                                                                    |
+| `minimum`, `maximum`, `fmod`, `power`                   | Arithmetic scalar/fields under ordinary promotion                                                  | Matching dtype over merged dimensions; integral `power` prints a result-type consistency diagnostic to standard output, not a Python warning                       |
 | `astype(value, dtype)`                                  | Scalar/field or recursively nested tuple                                                           | Convert every primitive leaf to `dtype`, preserving dimensions and tuple structure                                                                                 |
 | `broadcast(value, dimensions)`                          | Scalar/field; target dimensions contain every input dimension                                      | Field of the same dtype over exactly the target dimensions                                                                                                         |
 | `where(mask, true_value, false_value)`                  | Bool field mask; matching branch structure and corresponding leaf dtypes                           | Recursive field result with branch/mask dimension promotion                                                                                                        |
@@ -603,8 +618,12 @@ Cartesian shifts. Indexed single-target `FieldOffset` remains accepted by parts
 of the frontend but retains legacy tagged-provider behavior; it is not an
 equivalent portable, self-contained shift spelling (C4). This limitation does
 not remove the single-target declaration used by `as_offset` below.
-Closure folding can supply a literal;
-a runtime scalar displacement is not the same syntax as a fixed shift.
+The displacement must be an inline literal or an attribute of a constant
+namespace that [closure folding][closure-fold] recognizes (`FrozenNamespace` or
+`Enum`). A plain captured integer such as `SHIFT = 1` is rejected in
+`f(I + SHIFT)`: folding does not turn arbitrary captured scalar names into the
+literal that fixed-shift typing requires. A runtime scalar displacement is not
+the same syntax as a fixed shift.
 
 For half-integral `h`, `f(d+h)` reads the opposite staggered dimension and
 returns dimension `d`. With result index `i`, the input integer index is
@@ -673,14 +692,14 @@ Evidence: [reduction lowering][fo-lowering] (`_visit_neighbor_sum`,
 Its condition is a coordinate region, not a boolean field. Dimension/index
 comparisons describe regions; with `n` of `IndexType` (`int32`):
 
-| Expression | Region along `d`                                            |
-| ---------- | ----------------------------------------------------------- |
-| `d < n`    | `(-∞, n)`                                                   |
-| `d <= n`   | `(-∞, n+1)`                                                 |
-| `d > n`    | `[n+1, +∞)`                                                 |
-| `d >= n`   | `[n, +∞)`                                                   |
-| `d == n`   | `[n, n+1)`                                                  |
-| `d != n`   | Complement of `[n, n+1)`; not generally embedded-compatible |
+| Expression | Region along `d`                                 |
+| ---------- | ------------------------------------------------ |
+| `d < n`    | `(-∞, n)`                                        |
+| `d <= n`   | `(-∞, n+1)`                                      |
+| `d > n`    | `[n+1, +∞)`                                      |
+| `d >= n`   | `[n, +∞)`                                        |
+| `d == n`   | `[n, n+1)`                                       |
+| `d != n`   | Complement of `[n, n+1)`; not embedded-evaluable |
 
 Here the `d > n` row means integer indices `i >= n+1`; infinite endpoints are
 only notation for unbounded intervals. Reversed comparisons reverse the
@@ -711,7 +730,12 @@ branch-domain requirement.
 
 Embedded execution requires a one-dimensional condition and a contiguous
 resulting domain; interior gaps raise `NonContiguousDomain`. It cannot express
-every compiled disjoint condition, including `d != n`. Empty branches,
+every compiled disjoint condition. In particular, `d != n` is frontend syntax with
+backend-specific support: in field-level embedded execution, evaluating it raises
+`NotImplementedError` in [dimension comparison][model] before `concat_where`
+runs. The equivalent selection `concat_where(d < n, t, concat_where(d > n, t, f))`
+avoids constructing a disjoint condition, subject to the ordinary branch-domain
+and contiguity requirements. Empty branches,
 infinite broadcast domains, scalar branches, and more elaborate concatenations
 have feature-specific exclusions. The frontend accepts some region forms that
 embedded execution cannot represent; section 8 records this boundary rather
@@ -730,9 +754,12 @@ A declaration
 def recurrence(carry: C, x: X) -> C: ...
 ```
 
-defines a scalar recurrence lifted over a vertical axis `K`. `forward` is a
-boolean, and `K` must have kind `VERTICAL`. The first parameter, return value,
-and `init` have exactly matching scalar/product types. `C` may be a nested
+defines a scalar recurrence lifted over a vertical axis `K`. `axis` is
+required, and `K` must have kind `VERTICAL`. `forward` is a boolean defaulting to
+`True`; `init` defaults to `0.0`. The first parameter, return value, and `init`
+have exactly matching scalar/product types, so the default initializer fits only
+a scalar `float64` carry: integer, differently typed, or product carries need an
+explicit compatible `init`. `C` may be a nested
 tuple or supported named collection with scalar leaves. The body uses the
 scalar DSL subset and may compose lowerable scalar operators; it is not an
 arbitrary Python loop or a field remapping of the carry.
@@ -923,8 +950,8 @@ captured names or explicit parameters for such compositions. Evidence:
 [program lowering][p-lowering].
 
 `program` and `field_operator` accept backend/grid/compilation configuration
-and can be used bare or with arguments. `scan_operator` requires its scan
-configuration and accepts backend/grid selection, but does not expose the same
+and can be used bare or with arguments. `scan_operator` requires `axis`
+(`forward` and `init` have defaults, section 5.5) and accepts backend/grid selection, but does not expose the same
 compilation-option keywords at decoration time; its resulting entry point can
 use `.with_compilation_options`. An omitted backend uses `DEFAULT_BACKEND`,
 initially `None`; explicit `None` chooses field-level embedded execution.
@@ -1171,8 +1198,10 @@ edge cases uniformly, including NaN behavior.
 ### C10. General skip-sentinel API versus executable remapping
 
 **Definitions:** [constructors] and connectivity metadata accept
-integral `skip_value` arguments; [embedded remapping][array-field] and
-[FieldOffset handling][builtins] require `None` or `-1` on current paths.
+integral `skip_value` arguments; [embedded fields][array-field] require `None`
+or `-1` on current paths: remapping asserts `skip_value is None or skip_value == -1`,
+and `_make_reduction` compares against the fixed `_DEFAULT_SKIP_VALUE` rather than
+connectivity metadata.
 A constructor/remapping probe accepts a table with `skip_value=-99`, then
 raises `AssertionError` on remapping it. **Interpretation:** `-1` is the
 portable missing-neighbor sentinel; the generic constructor signature is
@@ -1216,8 +1245,9 @@ allocator, or conversion paths. State the wider type universe, and require
 backend evidence for the smaller/unsigned widths; do not label them categorically
 unparseable. Plain integer values also use int32/int64 inference, while the
 `int` annotation denotes int64: this distinction is current behavior, not an
-implicit contextual conversion rule. Signed source expressions classify the
-unsigned operand first, so source-negative dtype minima differ from host values
+implicit contextual conversion rule. In a negative literal, the positive
+magnitude is classified before unary minus is applied (no unsigned dtype is
+inferred), so source-negative dtype minima differ from host values
 as described in section 3.1; the representable-value rule alone does not describe
 every source spelling.
 
@@ -1485,6 +1515,7 @@ remap combinations.
 [domain-tests]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/integration_tests/feature_tests/ffront_tests/test_domain.py
 [exercises]: https://github.com/GridTools/gt4py/tree/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/docs/user/next/workshop/exercises
 [experimental]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/ffront/experimental.py
+[fo-lowering-tests]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/unit_tests/ffront_tests/test_foast_to_gtir.py
 [fo-lowering]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/ffront/foast_to_gtir.py
 [fo-parser]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/ffront/func_to_foast.py
 [fo-parser-tests]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/unit_tests/ffront_tests/test_func_to_foast.py
@@ -1520,6 +1551,7 @@ remap combinations.
 [scan-regression]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/regression_tests/ffront_tests/test_cse_extraction_scan_init.py
 [scan-tests]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/integration_tests/feature_tests/ffront_tests/test_scan.py
 [shift-tests]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/integration_tests/feature_tests/ffront_tests/test_cartesian_shifts.py
+[simple-assign]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/ffront/ast_passes/simple_assign.py
 [slides]: https://github.com/GridTools/gt4py/tree/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/docs/user/next/workshop/slides
 [source]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/src/gt4py/next/ffront/source_utils.py
 [staggered-tests]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/integration_tests/feature_tests/ffront_tests/test_staggered.py
