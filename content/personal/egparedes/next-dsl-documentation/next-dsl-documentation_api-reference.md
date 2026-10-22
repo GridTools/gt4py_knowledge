@@ -1,7 +1,7 @@
 ---
 title: GT4Py Next DSL API reference
 author: egparedes
-tags: [documentation, dsl, public-api, frontend, type-system, fields, domain, dimensions, connectivities, field-operators, scan, embedded, validation, provenance]
+tags: [documentation, dsl, public-api, frontend, type-system, fields, domain, dimensions, connectivities, field-operators, scan, embedded, validation]
 created: 2026-10-22
 status: draft
 ---
@@ -1516,7 +1516,7 @@ np.testing.assert_array_equal(out.asnumpy(), [-1.0, 4.0, 6.0, -1.0])
 | Form                                                                                                             | Field/scan operator body                                                  | Program body                        |
 | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------- |
 | Local assignment, tuple unpacking                                                                                | Supported; value bindings, no field stores                                | Not supported                       |
-| Local annotated assignment                                                                                       | Partial: builtin scalar annotations only                                  | Not supported                       |
+| Local annotated assignment                                                                                       | Partial: names must be DSL builtins or captured values                    | Not supported                       |
 | Chained assignment `b = c = a`                                                                                   | Not supported; fails at decoration                                        | Not supported                       |
 | `return expression`                                                                                              | Required on all reachable paths; common return type                       | No value return                     |
 | `if`/`elif`/`else`, conditional expression                                                                       | Scalar bool condition; branches statically checked; matching result types | Not supported                       |
