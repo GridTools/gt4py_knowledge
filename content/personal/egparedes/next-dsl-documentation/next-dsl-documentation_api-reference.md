@@ -11,6 +11,9 @@ status: draft
 > GT4Py revision; it is not an accepted normative standard. Migration adds this
 > frontmatter/context, relocates evidence links to immutable source URLs, and uses
 > knowledge-base wikilinks for companion documents. Technical claims are preserved.
+>
+> **Known corrections.** Read [[personal/egparedes/next-dsl-documentation/next-dsl-documentation#errata-for-this-baseline|baseline errata]] first.
+> The text below is a preserved snapshot; the errata take precedence.
 
 # gt4py.next DSL API reference
 
