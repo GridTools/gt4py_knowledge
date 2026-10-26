@@ -49,7 +49,7 @@ Work-in-progress proposals, organized by contributor.
 
 ### tehrengruber
 
-- [[personal/tehrengruber/scan-design/scan-redesign|Redesign of the vertical scan: pattern catalog]] — keywords: scan, vertical, reduction, boundary-conditions, windows, k-caches, fusion, embedded, jax, frontend, patterns, tridiagonal, sedimentation, migration
+- [[personal/tehrengruber/scan-design/scan-design|Redesign of the vertical scan in gt4py.next]] — keywords: scan, vertical, reduction, boundary-conditions, windows, fusion, frontend, patterns, tridiagonal, sedimentation, migration, workarounds
 
 <!-- Entry format (index only the main proposal; link appendices/implementations
      from within the proposal document itself, not here):

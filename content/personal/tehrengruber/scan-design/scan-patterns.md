@@ -102,18 +102,18 @@ new on at least one of them.
 | [C1](#c1) | Boundary rows: start/end-anchored regions          | + counter              | —         | PMAP stride-2 (5 regions), `_solve_itcs`      |
 | [C2](#c2) | Init from outside the column                       | field-valued init      | —         | `diagnose_pressure`, surface BCs              |
 | [C3](#c3) | Data-dependent start level                         | flag + index           | per level | radiation `i_cloud_top` (×4)                  |
-| [D1](#d1) | Bounded window sub-reduce, no state                | none (window only)     | per level | COSMO boxtracking                             |
-| [D2](#d2) | Bounded window inside a recurrence                 | state + $M$ ring slots | per level | precip-flux schemes                           |
+| [D1](#d1) | Bounded window inside a recurrence                 | state + $M$ ring slots | per level | precip-flux schemes                           |
 | [E1](#e1) | Recurrence under an extra data dimension           | ×G                     | per level | radiation g-points ($O(100)$)                 |
 | [X1](#x1) | $O(K^2)$ double loop, multi-level writes, feedback | —                      | —         | SHiELD melting                                |
 | [X2](#x2) | Data-dependent `while` over a table                | —                      | —         | `f_calc_rh_index`                             |
+| [X3](#x3) | Bounded window sub-reduce, no state                | none (window only)     | per level | COSMO boxtracking                             |
 
 The **carry today** column is how `scan_operator` must encode the pattern now,
 not a property of the pattern itself — the minimal forms below carry nothing
 they do not have to. Entries are **frontend** patterns: something that has to
 be *expressible*. Shapes whose only open question is how the toolchain
 executes them are collected under
-[composition](#composition-expressible-today-obligations-on-the-toolchain)
+[composition](#composition)
 instead.
 
 ---
@@ -126,7 +126,7 @@ $\mathit{state}_k = f(\mathit{state}_{k-1},\ \ldots,\ \mathit{state}_{k-m},\ \ma
 $m$ small and static (usually 1).
 
 ```python
-# example 1
+# example A1.1
 def recurrence(x: Column, y: Column) -> tuple[Column, Column]:
     u, v = np.empty_like(x), np.empty_like(x)
     u[:2], v[:2] = x[:2], y[:2]  # m-level start region: the boundary pattern C1
@@ -141,7 +141,7 @@ inputs produce $n + 1$ interface values, the first being the init itself
 ([C2](#c2)) [icon4py/diagnostics/1], [icon4py/thermodynamics/1]:
 
 ```python
-# example 2 — pseudo-numpy: half indices mark the interface (staggered) grid
+# example A1.2 — pseudo-numpy: half indices mark the interface (staggered) grid
 p[-1/2] = p_surface
 for k in range(n):
     p[k + 1/2] = p[k - 1/2] + rho[k] * g * dz[k]
@@ -150,12 +150,12 @@ for k in range(n):
 The same on integer indices:
 
 ```python
-# example 3
+# example A1.3
 def inclusive(w: Column, seed: float) -> Column:  # n inputs -> n + 1 outputs
     out = np.empty(w.size + 1)
     out[0] = seed  # the init is itself the first output level
-    for k in range(w.size):
-        out[k + 1] = out[k] + w[k]
+    for k in range(1, w.size+1):
+        out[k] = out[k-1] + w[k-1]
     return out
 ```
 
@@ -164,7 +164,7 @@ lookahead is only a read, legal in a forward scan; each offset shrinks the
 range the body is defined on by one level (group C's business):
 
 ```python
-# example 4
+# example A1.4
 def neighbour_inputs(x: Column, y: Column) -> Column:
     out = np.zeros_like(x)  # boundary levels: group C
     for k in range(1, x.size - 1):
@@ -209,7 +209,7 @@ References (every true scan of this shape; pace families by one exemplar):
 ### A2 {#a2} Monotone activation flag (work skipping)
 
 ```python
-# example 5
+# example A2
 def activated(q: Column, mask: Mask) -> Column:
     out = np.empty_like(q)
     active: Mask = np.logical_or.accumulate(mask)  # the latch is itself an A1 scan
@@ -236,7 +236,7 @@ the same latch, read inverted.
 [A1](#a1) accumulation with only the final value consumed.
 
 ```python
-# example 6
+# example B1
 def column_sum(x: Column) -> np.float64:
     return np.sum(x)  # K removed: one value per column
 ```
@@ -258,13 +258,14 @@ NDSL's `column_max`/`column_min` library helpers [pace/ndsl/2].
 ### B2 {#b2} Arg-reduction
 
 ```python
-# example 7
-def argmin_gather(x: Column, z: Column) -> tuple[np.float64, Mask]:
+# example B2
+def argmin_gather(x: Column, z: Column, q: Column) -> Column:
     best, k_best = x[0], 0
     for k in range(1, x.size):
         if x[k] < best:
             best, k_best = x[k], k
-    return z[k_best], np.arange(x.size) < k_best
+    # the index as a region bound, the gathered value as a per-level threshold
+    return np.where(np.arange(x.size) < k_best, np.minimum(q, z[k_best]), q)
 ```
 
 References: the tropopause — argmin of temperature, then the height at that
@@ -278,7 +279,7 @@ scheme [pace/shield/6]; the argmin of radiative cooling → `krad`
 ### B3 {#b3} First-hit / last-hit level search
 
 ```python
-# example 8
+# example B3
 def first_hit(h: Column, p: Mask, fill: float) -> np.float64:
     for k in range(h.size):  # reversed(range(...)) -> last hit
         if p[k]:
@@ -304,16 +305,12 @@ interpolation [pace/shield/8], cloud-deck top/base `lcld`/`kcld`
 ### B4 {#b4} Masked variable-depth reduction
 
 ```python
-# example 9
+# example B4
 def masked_sum(w: Column, depth: int) -> np.float64:  # depth: per-column, runtime
     s = np.float64(0.0)
     for k in range(depth):  # data-dependent trip count
         s = s + w[k]
     return s
-
-
-def masked_sum_vectorized(w: Column, depth: int) -> np.float64:
-    return np.float64(np.sum(np.where(np.arange(w.size) < depth, w, 0.0)))
 ```
 
 References: the root-zone conductance, `nroot` runtime-varying in the PBL
@@ -333,7 +330,7 @@ boundary-condition rows of a solve, initializations from other fields — and a
 region may be several levels deep (`interval(0, 2)`, `interval(-2, -1)`).
 
 ```python
-# example 10
+# example C1
 def regions(x: Column) -> Column:  # n >= 5
     out = np.empty_like(x)
     n = x.size
@@ -365,7 +362,7 @@ The seed is not a compile-time constant but a field — surface pressure, a
 surface flux, a lower boundary condition.
 
 ```python
-# example 11
+# example C2
 def seeded(dz_rho_g: Column, p_surface: float) -> Column:
     out = np.empty_like(dz_rho_g)
     out[0] = p_surface * np.exp(dz_rho_g[0])  # the boundary value *is* the init
@@ -386,7 +383,7 @@ remap spline [pace/fv3/2]; [B3](#b3)'s runtime `fill_value`.
 ### C3 {#c3} Data-dependent start level
 
 ```python
-# example 12
+# example C3
 def start_at(x: Column, k_start: int, seed: float) -> Column:
     # k_start: per column, any level in 0 .. n-1, or n for "this column never starts"
     out = np.zeros_like(x)
@@ -411,50 +408,21 @@ level [pace/shield/3].
 
 ## D. Windowed patterns (scan + sub-reduce)
 
-### D1 {#d1} Bounded window sub-reduce, no state feedback
+### D1 {#d1} Bounded window inside a recurrence
 
-Per level, a reduction over a *bounded* window of neighbouring levels:
-$y_k = \bigoplus_{m=0}^{M-1} g(x_k,\, x_{k-m},\, x_{k-m-1})$. With a static
-bound $M$ this is **not a recurrence at all** — per level a pure gather over
-the window and a reduction, no carried state:
-
-```python
-# example 13
-def box_flux(phi: Column, z: Column, v: Column, dt: float, m_max: int) -> Column:
-    out = np.empty_like(phi)
-    for k in range(phi.size):
-        lo = max(k - m_max + 1, 1)  # M = max Courant number; clipped at the model top
-        z_up = np.minimum(z[lo - 1 : k], z[k] + np.abs(v[lo : k + 1]) * dt)
-        z_low = np.minimum(z[lo : k + 1], z_up)
-        out[k] = -np.sum(phi[lo : k + 1] * (z_up - z_low))
-    return out
-```
-
-Three facts from the COSMO case study: the formula **self-masks** (out-of-reach
-levels contribute exactly zero, so no early exit is needed for correctness);
-the rolling buffers production code uses are a *memory* optimization, not
-semantics; and any cumulative quantity in the window
-(geometric height from `dz`) is a separate [A1](#a1) accumulation composed in front.
-
-References: the two-moment "boxtracking" sedimentation (eq. 12; tuple-valued
-$\phi$: mass *and* number density) [cosmo/1]; the asymptotic-mixing-length
-walk — per level a *runtime*-bounded window sub-reduce, beyond D1's static
-bound (worst case $O(K^2)$) [pace/shield/11].
-
-### D2 {#d2} Bounded window inside a recurrence
-
-Same window, but the contribution feeds or reads running state, so the scan is
-genuine. A scan body encodes the window as $M$ extra carry slots (a ring
-buffer) — an optimization the toolchain should introduce, not the user.
+A bounded window over the *input* levels whose contribution feeds or reads
+running state, so the scan is genuine. In a scan body the lookahead window costs $M$ pre-shifted input copies (or,
+against the scan direction, $M$ ring-buffer carry slots) — an encoding the
+toolchain should introduce, not the user.
 
 ```python
-# example 14
-def windowed_scan(x: Column, m_max: int) -> Column:
-    out = np.empty_like(x)
-    out[0] = x[0]
-    for k in range(1, x.size):
-        window = x[max(k - m_max + 1, 0) : k + 1]  # the last M input levels
-        out[k] = 0.5 * out[k - 1] + np.sum(window)  # sub-reduce feeding the state
+# example D1
+def windowed_scan(x: Column, m_max: int) -> Column:  # x carries m_max - 1 lookahead levels
+    n = x.size - m_max + 1
+    out = np.empty(n)
+    out[0] = np.sum(x[0:m_max])
+    for k in range(1, n):
+        out[k] = 0.5 * out[k - 1] + np.sum(x[k : k + m_max])  # lookahead window
     return out
 ```
 
@@ -471,16 +439,16 @@ over an extra, non-spatial dimension of $O(100)$ entries. Tuple unrolling does
 not scale at that size.
 
 ```python
-# example 15
+# example E1
 # 140 = RRTMG LW; in PMAP the count is read from the gas-optics file at runtime
-GPointField = np.ndarray[tuple[Literal[140], int], np.dtype[np.float64]]  # (g-point, K)
+ComponentField = np.ndarray[tuple[Literal[140], int], np.dtype[np.float64]]  # (component, K)
 
 
-def per_gpoint(a: GPointField, b: GPointField) -> GPointField:
+def per_component(a: ComponentField, b: ComponentField) -> ComponentField:
     out = np.empty_like(b)
     out[:, 0] = b[:, 0]
     for k in range(1, b.shape[1]):
-        out[:, k] = a[:, k] * out[:, k - 1] + b[:, k]  # one A1 per (column, g-point)
+        out[:, k] = a[:, k] * out[:, k - 1] + b[:, k]  # one A1 per (column, component)
     return out
 ```
 
@@ -490,72 +458,17 @@ need a reduction over that dense dimension [pmap/radiation/1]. pace has no
 in-DSL instance: its g-point workload is delegated to an external package, and
 tracers ride a data dimension indexed one slot per call [pace/shield/13].
 
-## X. Out of scope — documented boundaries
+## Composition {#composition}
 
-### X1 {#x1} $O(K^2)$ double loop with multi-level writes and feedback
-
-```python
-# example 16
-T_MELT = 273.15
-
-
-def melt(qice: Column, qrain: Column, temperature: Column) -> None:
-    for k in range(qice.size):  # source levels, upward
-        if qice[k] <= 0.0:
-            continue
-        for m in range(k - 1, -1, -1):  # receiving levels, downward
-            if temperature[m] < T_MELT:
-                break  # data-dependent exit
-            amount = min(qice[k], temperature[m] - T_MELT)  # reads *updated* state
-            qice[k] -= amount  # write at k
-            qrain[m] += amount  # write at m
-            temperature[m] -= amount  # ... and re-read by later k iterations
-            if qice[k] <= 0.0:
-                break
-```
-
-No masked bounded window ([D1](#d1)) computes the same answer. Options:
-reformulate in flux form (what COSMO did for exactly this physics — it changes
-the operation order, so results differ and need validation), or keep it as
-sequential column code outside the DSL.
-
-References: the melting loop [noaa/shield/1]; its live form `sedi_melt` — a
-stencil with dynamic-offset writes at the traversed levels, a host-side Python
-fallback kept beside it [pace/shield/12]. Nothing in PMAP currently has this
-shape.
-
-### X2 {#x2} Data-dependent `while` over a lookup table
-
-Not vertical at all, but it blocks the same ports:
-
-```python
-# example 17
-def rh_lookup(rh: float, bounds: Column, table: Column) -> np.float64:
-    # bounds: ascending upper edge of each humidity bin, last one +inf
-    # table: one tabulated coefficient per bin (N_RH rows, compile-time constant)
-    i = 0
-    while rh > bounds[i]:  # (1) data-dependent search for the bin
-        i += 1
-    return np.float64(table[i])  # (2) what the index is for: a computed-index gather
-```
-
-The table holds aerosol optical properties per humidity bin (`rh_lower.A[irh]`
-in the source).
-
-Both halves are bounded by a compile-time constant, so the pair unrolls into one
-masked select over the bins — $\sum_i \mathrm{where}(\text{first covering bin
-is } i,\ \mathit{table}_i,\ 0)$ — which is branch-free and needs no indexing;
-alternatively the index field is precomputed outside.
-
-References: `f_calc_rh_index` [pmap/radiation/4].
-
-## Compound examples {#compound}
+Every example only composes catalog entries. Where two forms are given they
+are equal: the first is what should be *written*, the second the one k-loop
+the toolchain should *produce* — the fusion obligation.
 
 **Tridiagonal solve** — the shape of the `_solve_itcs` forward sweep:
 
 ```python
-# example 18
-def compound(x: Column, y: Column, surface: float) -> Column:
+# example composition.1
+def forward_sweep(x: Column, y: Column, surface: float) -> Column:
     out = np.empty_like(x)
     n = x.size
     out[0] = surface * x[0]  # C1 peeled first row, seeded by data (C2)
@@ -569,7 +482,7 @@ The opposite-direction partner completing the pair; `f` materializes as a full
 column — fusion across directions is not possible:
 
 ```python
-# example 19
+# example composition.2
 def back_substitution(e: Column, f: Column) -> Column:  # f: the forward sweep's output
     out = np.empty_like(f)
     out[-1] = f[-1]
@@ -588,7 +501,7 @@ pairs [pmap/radiation/5], [pmap/radiation/6], and in `tropopause`
 passes, no scan; production writes the broadcast as one:
 
 ```python
-# example 20
+# example composition.3
 def normalized(x: Column) -> Column:
     return x / np.sum(x)  # the column-constant broadcast back over K
 ```
@@ -596,17 +509,10 @@ def normalized(x: Column) -> Column:
 References: `eta_levels` [pmap/microphysics/2], the `tropopause` broadcast
 [pmap/microphysics/5], `_dev/cloudsc2`'s `trpaus`.
 
-## Composition: expressible today, obligations on the toolchain
-
-Nothing here is a new frontend pattern — every example only composes catalog
-entries; what the evidence forces is the fusion obligation. Each example's
-two forms are equal: the first is what should be *written*, the second the
-one k-loop the toolchain should *produce*.
-
 **Independent recurrences sharing per-level work** ([A1](#a1) × N):
 
 ```python
-# example 21
+# example composition.4
 def species(q: Column, rho: Column) -> Column:
     out = np.empty_like(q)
     out[0] = q[0]
@@ -616,7 +522,7 @@ def species(q: Column, rho: Column) -> Column:
 ```
 
 ```python
-# example 21 (fused)
+# example composition.4 (fused)
 def species_fused(q: Stack, rho: Column) -> Stack:  # = np.stack([species(qi, rho) for qi in q])
     out = np.empty_like(q)
     out[:, 0] = q[:, 0]
@@ -641,7 +547,7 @@ accumulations in one field operator [icon4py/tmx/1].
 same-direction cascade):
 
 ```python
-# example 22
+# example composition.5
 def peak(a: Column, x: Column) -> tuple[Column, np.float64]:
     out = np.empty_like(x)
     out[0] = x[0]
@@ -651,7 +557,7 @@ def peak(a: Column, x: Column) -> tuple[Column, np.float64]:
 ```
 
 ```python
-# example 22 (fused)
+# example composition.5 (fused)
 def peak_fused(a: Column, x: Column) -> tuple[Column, np.float64]:  # = peak, one pass
     out = np.empty_like(x)
     out[0] = x[0]
@@ -666,7 +572,7 @@ References: the cloudsc main loops — five per-level fall/sink fluxes plus six
 column accumulators — cy49r1 [pmap/microphysics/1], cy50r1
 [pmap/microphysics/3], dwarf [pmap/microphysics/4]; SW fluxes
 [pmap/radiation/9], LW derivatives [pmap/radiation/10]; pointwise stages in
-the cascade: sedimentation's `cumsum` of `dz` ([D1](#d1)), `_trapezoidal_z`'s
+the cascade: sedimentation's `cumsum` of `dz` ([X3](#x3)), `_trapezoidal_z`'s
 weights [pmap/dycore/5], radiation's per-level optics [pmap/radiation/1].
 
 **Horizontal-offset producer feeding a scan** (pointwise with a horizontal
@@ -674,7 +580,7 @@ offset → [A1](#a1)) — no surveyed scan body reads a horizontal offset; only
 this split form occurs:
 
 ```python
-# example 23
+# example composition.6
 def div_then_scan(flux: Stack, a: Column) -> Stack:
     g: Stack = flux[1:, :] - flux[:-1, :]  # horizontal-offset producer, materialized
     out = np.empty_like(g)
@@ -685,7 +591,7 @@ def div_then_scan(flux: Stack, a: Column) -> Stack:
 ```
 
 ```python
-# example 23 (fused)
+# example composition.6 (fused)
 def div_then_scan_fused(flux: Stack, a: Column) -> Stack:  # = div_then_scan
     out: Stack = np.empty((flux.shape[0] - 1, flux.shape[1]))
     out[:, 0] = flux[1:, 0] - flux[:-1, 0]
@@ -699,6 +605,95 @@ def div_then_scan_fused(flux: Stack, a: Column) -> Stack:  # = div_then_scan
 References: `_rhs_fluxdiv_xyz` [pmap/dycore/20] feeding `_solve_itcs`'s
 `fluxdiv` argument [pmap/dycore/1]; every PMAP solve consumes such a
 horizontally produced right-hand side.
+
+## X. Out of scope — documented boundaries
+
+### X1 {#x1} $O(K^2)$ double loop with multi-level writes and feedback
+
+```python
+# example X1
+T_MELT = 273.15
+
+
+def melt(qice: Column, qrain: Column, temperature: Column) -> None:
+    for k in range(qice.size):  # source levels, upward
+        if qice[k] <= 0.0:
+            continue
+        for m in range(k - 1, -1, -1):  # receiving levels, downward
+            if temperature[m] < T_MELT:
+                break  # data-dependent exit
+            amount = min(qice[k], temperature[m] - T_MELT)  # reads *updated* state
+            qice[k] -= amount  # write at k
+            qrain[m] += amount  # write at m
+            temperature[m] -= amount  # ... and re-read by later k iterations
+            if qice[k] <= 0.0:
+                break
+```
+
+No masked bounded window ([X3](#x3)) computes the same answer. Options:
+reformulate in flux form (what COSMO did for exactly this physics — it changes
+the operation order, so results differ and need validation), or keep it as
+sequential column code outside the DSL.
+
+References: the melting loop [noaa/shield/1]; its live form `sedi_melt` — a
+stencil with dynamic-offset writes at the traversed levels, a host-side Python
+fallback kept beside it [pace/shield/12]. Nothing in PMAP currently has this
+shape.
+
+### X2 {#x2} Data-dependent `while` over a lookup table
+
+Not vertical at all, but it blocks the same ports:
+
+```python
+# example X2
+def rh_lookup(rh: float, bounds: Column, table: Column) -> np.float64:
+    # bounds: ascending upper edge of each humidity bin, last one +inf
+    # table: one tabulated coefficient per bin (N_RH rows, compile-time constant)
+    i = 0
+    while rh > bounds[i]:  # (1) data-dependent search for the bin
+        i += 1
+    return np.float64(table[i])  # (2) what the index is for: a computed-index gather
+```
+
+The table holds aerosol optical properties per humidity bin (`rh_lower.A[irh]`
+in the source).
+
+Both halves are bounded by a compile-time constant, so the pair unrolls into one
+masked select over the bins — $\sum_i \mathrm{where}(\text{first covering bin
+is } i,\ \mathit{table}_i,\ 0)$ — which is branch-free and needs no indexing;
+alternatively the index field is precomputed outside.
+
+References: `f_calc_rh_index` [pmap/radiation/4].
+
+### X3 {#x3} Bounded window sub-reduce, no state feedback
+
+Per level, a reduction over a *bounded* window of neighbouring levels:
+$y_k = \bigoplus_{m=0}^{M-1} g(x_k,\, x_{k-m},\, x_{k-m-1})$. With a static
+bound $M$ this is **not a recurrence at all** — per level a pure gather over
+the window and a reduction, no carried state:
+
+```python
+# example X3
+def box_flux(phi: Column, z: Column, v: Column, dt: float, m_max: int) -> Column:
+    out = np.empty_like(phi)
+    for k in range(phi.size):
+        lo = max(k - m_max + 1, 1)  # M = max Courant number; clipped at the model top
+        z_up = np.minimum(z[lo - 1 : k], z[k] + np.abs(v[lo : k + 1]) * dt)
+        z_low = np.minimum(z[lo : k + 1], z_up)
+        out[k] = -np.sum(phi[lo : k + 1] * (z_up - z_low))
+    return out
+```
+
+Three facts from the COSMO case study: the formula **self-masks** (out-of-reach
+levels contribute exactly zero, so no early exit is needed for correctness);
+the rolling buffers production code uses are a *memory* optimization, not
+semantics; and any cumulative quantity in the window
+(geometric height from `dz`) is a separate [A1](#a1) accumulation composed in front.
+
+References: the two-moment "boxtracking" sedimentation (eq. 12; tuple-valued
+$\phi$: mass *and* number density) [cosmo/1]; the asymptotic-mixing-length
+walk — per level a *runtime*-bounded window sub-reduce, beyond X3's static
+bound (worst case $O(K^2)$) [pace/shield/11].
 
 ## References {#references}
 
@@ -806,7 +801,7 @@ and cite one exemplar per family — the sweep found 161 true scans among 389
    [[personal/tehrengruber/scan-design/scan-design|the design document]]
    should be the API proposal measured against the entries, cross-checked with
    [[personal/havogt/scan-redesign|havogt's scan redesign]] (whose constructs
-   already target A1–A2, B1–B4, C1–C3 and D1–D2 explicitly — the overlap
+   already target A1–A2, B1–B4, C1–C3, D1 and X3 explicitly — the overlap
    is deliberate, and conflicts should be called out per entry rather than per
    document).
 

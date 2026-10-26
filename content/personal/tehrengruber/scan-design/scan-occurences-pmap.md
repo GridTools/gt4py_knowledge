@@ -46,23 +46,23 @@ for these show the *working* code; all other sketches are untested.
 
 ## 1. Dycore — 16 scan stencils
 
-| File | Stencil | Dir | Recurrence / carried state |
-|---|---|---|---|
-| `diffusion/scalar.py:440,476` | `_solve_itcs` | F+B | Thomas solve: `ee, ff` at `[-1]`; back-sub `psi = ee·psi[+1] + ff` — **ported** |
-| `diffusion/scalar_z.py:197,231` | `_solve_itcs` | F+B | Same Thomas solve |
-| `diffusion/vector.py:797,887` | `_solve_itcs` | F+B | Three coupled Thomas solves (`ee_*, ff_*`) |
-| `operators/nabla.py:353–365` | `_nabla_z_cmp4_solve` | F+B | Compact-scheme Thomas solve |
-| `operators/nabla.py:485–508` | `_nabla_z_cmp6_solve` | F+B | Same, per-band coefficients |
-| `helmholtz/preconditioner.py:61,68` | `_tridiagonal` | F+B | **Stride-2** recurrence (`ff[0,0,-2]`, `rp[0,0,+2]`) → carry needs 2 levels — **ported** |
-| `poisson/preconditioner.py:59,66` | `_tridiagonal` | F+B | Same stride-2 solve |
-| `helmholtz/preconditioner_coefficients.py:186` | `_tridiagonal_init` | F | Stride-2 LU factorisation (`ee[0,0,-2]`) |
-| `poisson/preconditioner_coefficients.py:109` | `_tridiagonal_init` | F | Same |
-| `operators/hydrostatic_exner.py:59` | `hydrostatic_exner` | B | `pexhyd = pexhyd[+1] + …` (top-down hydrostatic integral) |
-| `operators/integral.py:140` | `_trapezoidal_z` | B | 2D column sum `ci_psi +=` — **ported** (operator level) |
-| `operators/cloud_cover.py:203,225` | `_cloud_cover_maximum/_random` | F | 2D carry: `max` / cumulative product |
-| `operators/cloud_cover.py:259,290,319` | `_cloud_base/top_height`, `_cloud_top_temperature` | F | First/last qualifying level (2D carry) |
-| `diagnostics/boundary_layer_height.py:102` | `_boundary_layer_height` | F | First level with `rib > 0.25`; also reads own temporaries at `[-1]` |
-| `boundary_conditions/cell_perturbation_method.py:424` | `wind_bl_height` | F | Level search bracketing `bl_height` into 2D |
+| File                                                  | Stencil                                            | Dir | Recurrence / carried state                                                               |
+| ----------------------------------------------------- | -------------------------------------------------- | --- | ---------------------------------------------------------------------------------------- |
+| `diffusion/scalar.py:440,476`                         | `_solve_itcs`                                      | F+B | Thomas solve: `ee, ff` at `[-1]`; back-sub `psi = ee·psi[+1] + ff` — **ported**          |
+| `diffusion/scalar_z.py:197,231`                       | `_solve_itcs`                                      | F+B | Same Thomas solve                                                                        |
+| `diffusion/vector.py:797,887`                         | `_solve_itcs`                                      | F+B | Three coupled Thomas solves (`ee_*, ff_*`)                                               |
+| `operators/nabla.py:353–365`                          | `_nabla_z_cmp4_solve`                              | F+B | Compact-scheme Thomas solve                                                              |
+| `operators/nabla.py:485–508`                          | `_nabla_z_cmp6_solve`                              | F+B | Same, per-band coefficients                                                              |
+| `helmholtz/preconditioner.py:61,68`                   | `_tridiagonal`                                     | F+B | **Stride-2** recurrence (`ff[0,0,-2]`, `rp[0,0,+2]`) → carry needs 2 levels — **ported** |
+| `poisson/preconditioner.py:59,66`                     | `_tridiagonal`                                     | F+B | Same stride-2 solve                                                                      |
+| `helmholtz/preconditioner_coefficients.py:186`        | `_tridiagonal_init`                                | F   | Stride-2 LU factorisation (`ee[0,0,-2]`)                                                 |
+| `poisson/preconditioner_coefficients.py:109`          | `_tridiagonal_init`                                | F   | Same                                                                                     |
+| `operators/hydrostatic_exner.py:59`                   | `hydrostatic_exner`                                | B   | `pexhyd = pexhyd[+1] + …` (top-down hydrostatic integral)                                |
+| `operators/integral.py:140`                           | `_trapezoidal_z`                                   | B   | 2D column sum `ci_psi +=` — **ported** (operator level)                                  |
+| `operators/cloud_cover.py:203,225`                    | `_cloud_cover_maximum/_random`                     | F   | 2D carry: `max` / cumulative product                                                     |
+| `operators/cloud_cover.py:259,290,319`                | `_cloud_base/top_height`, `_cloud_top_temperature` | F   | First/last qualifying level (2D carry)                                                   |
+| `diagnostics/boundary_layer_height.py:102`            | `_boundary_layer_height`                           | F   | First level with `rib > 0.25`; also reads own temporaries at `[-1]`                      |
+| `boundary_conditions/cell_perturbation_method.py:424` | `wind_bl_height`                                   | F   | Level search bracketing `bl_height` into 2D                                              |
 
 **Field-operator rewrites (no scan):**
 
