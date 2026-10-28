@@ -1001,6 +1001,9 @@ Define scan output domain:
 kview in the inputs
 
 kview in the carry
+
+TODO: Write down what the various variants need in terms of extensions, e.g. init needs a good amount of additional syntax to slice fields.
+
 ## Cross-cutting workarounds
 
 Every item below is something production code carries *because* the current
