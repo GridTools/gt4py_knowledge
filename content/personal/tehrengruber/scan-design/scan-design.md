@@ -472,7 +472,7 @@ inclusive(seed, w, range=extend(w.domain[K], 1))
 @field_operator
 def inclusive(seed: float, w: Field)-> Field
 	@scan_operator(init=seed)
-	def inclusive_pass(out: KView[float, 1], w: KView[float]):
+	def inclusive_pass(out: KView[float], w: KView[float]):
 	    return out[-1] + w[-1]
 	return inclusive_pass(w, range=extend(w.domain[K], 1))
       
@@ -976,33 +976,219 @@ def box_flux(phi: Column, z: Column, v: Column, dt: float, m_max: int) -> Column
 
 ## Requirements
 
-Boundary conditions:
-- Using init: 
-	- can only be used for one sided boundary conditions and only if they are the same on all levels -> otherwise concat_where needs to be used
-	- get rid of index_var="level"
-	- better compatibility with JAX
-	- need to a solution to pass runtime values to scan_operator
-- Using if-condition: 
-	- are more flexible and easier to understand but harder to check correctness
-	- init values will not be used
-	- need some way to access index inside the operator
+Sketch vocabulary as in the examples above: `KView[T]` scanned input,
+`KView[T, m]` carry with `m` readable previous levels, `K(n)` level literal,
+`range=` output domain. Related: havogt's
+[[personal/havogt/scan-redesign/scan-redesign|scan redesign]] (§3.1 K-local
+views, §3.3 boundaries, §4.6 `history=m`).
 
-Passing runtime values to init:
-- Define scan_operator inside field_operator
-- Separate decorator and pass of scan_operator
-- Pass init as String -> becomes implicit parameter of the function (Type?)
 
-Accessing index inside the operator (currently used only in B2 and if-condition variant for BCs):
-- index_var parameter
-- Introduce Index builtin
 
-Define scan output domain:
+### Boundary conditions
 
-kview in the inputs
+```python
+def two_sided(x: Column, seed: float, top: float) -> Column:
+    out = np.empty_like(x)
+    out[0] = seed  # bottom BC
+    for k in range(1, x.size - 1):
+        out[k] = 0.5 * out[k - 1] + x[k]
+    out[-1] = top  # top BC
+    return out
+```
 
-kview in the carry
+#### Option 1: Using init:
 
-TODO: Write down what the various variants need in terms of extensions, e.g. init needs a good amount of additional syntax to slice fields.
+```python
+@field_operator
+def two_sided(x: IKField, seed: float, top: float) -> IKField:
+    @scan_operator(init=seed)
+    def _interior(out: KView[float], x: KView[float]) -> float:
+        return 0.5 * out[-1] + x[0]
+
+    interior = _interior(x, range=x.domain[K][:-1])  # K[0] written from init, body on K[1:-1]
+    return concat_where(x.domain[K][:-1], interior, top)  # top BC outside the scan
+```
+
+- can only be used for one-sided boundary conditions and only if they are the same on all levels -> otherwise concat_where needs to be used
+- get rid of index_var="level"
+- better compatibility with JAX
+- need to a solution to pass runtime values to scan_operator (see below)
+
+#### Option 2: Using if-condition:
+
+```python
+@scan_operator(index_var="level", init=0.0)  # init never read
+def two_sided(out: KView[float], level: K, x: KView[float], seed: float, top: float, grid_info: GridInfo) -> float:
+    if level == K(0):
+        return seed
+    elif level == K(grid_info.nz - 1):
+        return top
+    else:
+        return 0.5 * out[-1] + x[0]
+
+
+two_sided(x, seed, top, grid_info)
+```
+
+- more flexible and easier to understand but harder to check correctness
+- init values will not be used
+- need some way to access index inside the operator (see below)
+
+### Passing runtime values to init
+
+#### Option 1: Define scan_operator inside field_operator:
+
+```python
+@field_operator
+def two_sided(x: IKField, seed: float) -> IKField:
+    @scan_operator(init=seed)
+    def _interior(out: KView[float], x: KView[float]) -> float:
+        return 0.5 * out[-1] + x[0]
+
+    return _interior(x, range=x.domain[K][:-1])
+```
+
+#### Option 2: Separate decorator and pass of scan_operator:
+
+```python
+@scan_operator(axis=KDim, forward=True)  # axis/forward stay in the decorator, init moves to the call
+def _interior(out: KView[float], x: KView[float]) -> float:
+    return 0.5 * out[-1] + x[0]
+
+
+@field_operator
+def two_sided(x: IKField, seed: float, top: float) -> IKField:
+    interior = _interior(x, init=seed, range=x.domain[K][:-1])  # init checked against the carry annotation
+    return concat_where(x.domain[K][:-1], interior, top)
+
+
+two_sided(x, seed, top)
+```
+
+A decorator default (`@scan_operator(axis=KDim, forward=True, init=0.0)`)
+stays possible; the call-site `init=` overrides it.
+
+#### Option 3: Pass init as String -> becomes implicit parameter of the function (Type?):
+
+```python
+@scan_operator(init="seed")
+def _interior(out: KView[float], x: KView[float]) -> float:
+    return 0.5 * out[-1] + x[0]
+
+
+@field_operator
+def two_sided(x: IKField, seed: float) -> IKField:
+    return _interior(x, seed=seed, range=x.domain[K][:-1])  # type of `seed` = type of the carry
+```
+
+For a `KView[float, m]` carry with `m > 1` or a tuple carry the implicit parameter would have to be `m` levels or a tuple, which a bare name cannot express.
+### Accessing index inside the operator
+
+(currently used only in B2 and if-condition variant for BCs)
+
+```python
+def argmin(x: Column) -> int:
+    best, k_best = np.inf, 0
+    for k in range(x.size):
+        if x[k] < best:
+            best, k_best = x[k], k
+    return k_best
+```
+
+#### Option 1: Index_var parameter:
+
+```python
+@scan_operator(fold=True, index_var="level", init=(np.inf, K(0)))
+def argmin(state: tuple[float, K], level: K, x: KView[float]) -> tuple[float, K]:
+    best, k_best = state
+    if x[0] < best:
+        return x[0], level
+    return best, k_best
+```
+
+#### Option 2: Introduce Index builtin:
+
+```python
+@scan_operator(fold=True, init=(np.inf, K(0)))
+def argmin(state: tuple[float, K], x: KView[float]) -> tuple[float, K]:
+    best, k_best = state
+    level = index(K)  # GTIR already has `index(dim)` (used by the concat_where transformation)
+    if x[0] < best:
+        return x[0], level
+    return best, k_best
+```
+
+`index_var` and the `index` builtin only differ in how the body obtains the
+current level. Both need the same index type `K` for what the body does with it:
+- literals: `K(0)` (BCs, B2)
+- comparison with the running index: `level == K(0)`, `level < K(2)` (A1.1)
+- `±const` arithmetic: `K(grid_info.nz - 2) <= level` (C1)
+- end anchor for the last level: a runtime scalar `K(grid_info.nz - 1)` or an anchor resolved against the scan range (`K.stop - 1`)
+- conversion from an `int32` field: `level == k_start` with `k_start` per column (C3)
+- usable as carry and output element type: `(best, k_best)` in B2
+
+### Define scan output domain
+
+ `range=` at the call else full K range of its inputs
+
+```python
+inclusive(w, range=extend(w.domain[K], 1))                 # one level more, filled by init (A1.3)
+_forward_sweep(x, y, surface, range=x.domain[K][:-1])      # explicit sub-range (composition.1)
+start_at(x, range=named_range(K, k_start, x.domain[K].stop))  # k_start a field: a mask, not a domain (C3)
+```
+
+### kview in the inputs
+
+
+```python
+def body(out: KView[float], x: KView[float], c: float, mask: KView[bool]) -> float:
+    x[0]       # current level
+    x[-1]      # previous level
+    x[1]       # lookahead
+    x[0:m]     # window over a local dimension
+    x[-1/2]    # staggered neighbour (A1.2)
+    c          # K-less input
+```
+
+### kview in the carry
+
+```python
+def body(out: KView[float, m], ...) -> float  # out[-1..-m] forward, out[1..m] backward; out[0] unreadable
+```
+
+- `KView[T, m]`: `m` is the number of previously written levels the body may
+  read (`out[-1]` is the value returned one level ago, the return value is the
+  implicit `out[0]`) and the number of levels the init supplies. A missing
+  count means `m = 1`; it is written when more is needed (`KView[float, 2]`
+  in A1.1).
+- the `m` init levels are *written*: they are the first `m` levels of the
+  range, the body runs on the rest (composition.2/4, A1.1). Forms: scalar or
+  K-less field (broadcast), tuple of `m`, field slice of `m` levels.
+- plain carry (`state: float`, C2): init is the carry before the first level,
+  not written (today's semantics).
+- tuple carry mixes both (A2); non-output slots never materialized.
+- `fold=True`: nothing written, final carry returned K-less (B2, B3).
+
+### What each variant needs
+
+F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
+
+| Variant                      | Needs                                                                                                                                                                                                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BC, init                     | F: field-valued init; K-literal field slicing (`x[K(0)]`, `x[K(0):K(2)]`, `f[K(-1)]`); runtime init (one of the three below); `m`-level init. T: init vs carry annotation. D: init written as the first `m` levels; `range=`/`extend`. Two-sided: `concat_where` + `(Koff[-1])` outside, or `end=` (A1.4). |
+| BC, if                       | F: index access (one of the two below); `if` on index conditions; `init` optional. T: index type `K`, end anchor. D: guard-refined extents (`out[-1]` under `level != K(0)`). L: the k-loop must be split into one branch-free loop per region of the index conditions (level 0, interior, last level), as GridTools intervals do; this must be guaranteed, not an optional optimization, else every interior level evaluates the boundary branches (A2 today). |
+| init (a) nested def          | F: nested `def` in `field_operator`, closure capture. T: captured variables typed from the enclosing scope. L: hoisting; body not reusable.                                                                                                                                   |
+| init (b) call-site `init=`   | F: `init=` keyword at the call, decorator init optional. T: checked against the carry annotation. L: nothing (init is already a scan argument).                                                                                                                                |
+| init (c) string              | F: string -> implicit keyword parameter; expression parser if expressions allowed. T: type from the carry annotation. No static checking.                                                                                                                                       |
+| index (a) `index_var`        | F: decorator keyword, parameter removed from the call signature. T: index type `K`.                                                                                                                                                                                           |
+| index (b) builtin            | F: `index(dim)` in scan (and field operator) bodies. T: index type `K`. L: GTIR `index`.                                                                                                                                                                                       |
+| output domain                | F: `range=`, `extend`, `named_range`, `x.domain[K]` slicing. D: forward, call-site anchored K inference replacing `_extract_vertical_dims`/`closure_column_range`; data-dependent range rejected or lowered to a mask.                                                            |
+| kview inputs                 | T: `KView[T]`, static-offset `__getitem__`, `x: T` sugar, K-less inputs as plain values, window slices over a local dimension. D: per-input extents, guard-refined. L: k-caches (GTFN), pre-shifted leaves (JAX), shifted views (embedded); half offsets blocked on staggering. |
+| kview carry                  | T: `KView[T, m]`, `m` static, direction-dependent offsets, `m`-level init forms. D: init written as the first `m` levels; `fold=True`. L: `m`-tuple desugar, flush k-caches, non-output slots not materialized, `exit_condition` early exit (B3).                                                |
+
+Cheapest consistent set: `KView` inputs + carry, call-site `init=` (b),
+`index` builtin (b), `range=` with forward inference, `concat_where` outside
+for the rest.
 
 ## Cross-cutting workarounds
 
