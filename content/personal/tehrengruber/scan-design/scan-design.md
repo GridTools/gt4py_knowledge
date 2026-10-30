@@ -17,6 +17,7 @@ status: draft
 > expressed in gt4py. Reference labels are those of the catalog's
 > [[personal/tehrengruber/scan-design/scan-patterns#references|references]].
 
+TODO: Describe what exclusive and inclusive scan is
 ## Representability with today's `scan_operator`
 
 Each catalog example, classified: can today's **`gt4py.next`**
@@ -25,14 +26,13 @@ Each catalog example, classified: can today's **`gt4py.next`**
 
 Verdicts:
 
-| Verdict                        | Meaning                                                                 |
-| ------------------------------ | ----------------------------------------------------------------------- |
-| ✓                              | expressible cleanly                                                     |
-| ✓ (fold)                       | clean only because the boundary row folds *algebraically* into the init |
-| poor readability               | expressible; the workarounds hurt readability only                      |
-| poor readability & performance | expressible; the workarounds hurt readability and cost performance      |
-| poor performance               | expressible cleanly; the execution wastes work                          |
-| ✗                              | not expressible                                                         |
+| Verdict          | Meaning                                                                 |
+| ---------------- | ----------------------------------------------------------------------- |
+| ✓                | expressible cleanly                                                     |
+| ✓ (fold)         | clean only because the boundary row folds *algebraically* into the init |
+| poor readability | expressible; the workarounds hurt readability only                      |
+| poor performance | expressible cleanly; the execution wastes work                          |
+| ✗                | not expressible                                                         |
 Opinions:
 not ok: We have to solve this, before writing code that way.
 temporarily: Doesn't need to be solved right away.
@@ -1007,12 +1007,21 @@ def two_sided(x: IKField, seed: float, top: float) -> IKField:
 
     interior = _interior(x, range=x.domain[K][:-1])  # K[0] written from init, body on K[1:-1]
     return concat_where(x.domain[K][:-1], interior, top)  # top BC outside the scan
+    
+@scan_pass
+def _interior(out: KView[float], x: KView[float]) -> float:
+	return 0.5 * out[-1] + x[0]
+
+@field_operator
+def two_sided(x: IKField, seed: float, top: float) -> IKField:
+    scan(_interior, init=seed, top)
 ```
 
 - can only be used for one-sided boundary conditions and only if they are the same on all levels -> otherwise concat_where needs to be used
 - get rid of index_var="level"
 - better compatibility with JAX
 - need to a solution to pass runtime values to scan_operator (see below)
+- Exclusive init means we don't need to protect (e.g. by the init value itself) accesses to past levels (e.g. accessing -1 on the first level)
 
 #### Option 2: Using if-condition:
 
@@ -1033,6 +1042,7 @@ two_sided(x, seed, top, grid_info)
 - more flexible and easier to understand but harder to check correctness
 - init values will not be used
 - need some way to access index inside the operator (see below)
+- from the frontend perspective: if we don't want the user to need to take care of keeping book of the iteration he is in, then the init value has meaning when the scan is inclusive (meaning output of the scan pass is the output of the scan operator on the first level(s))
 
 ### Passing runtime values to init
 

@@ -39,6 +39,7 @@ status: draft
   (prior art, the sedimentation case study, the muphys analysis).
 
 TODO: Where the scan computes is currently undefined. We should add pattern where the output is only defined on a subset of the domain that is different to the input.
+TODO: add ICE microphysics
 
 ## How to read this catalog
 
@@ -429,6 +430,8 @@ def windowed_scan(x: Column, m_max: int) -> Column:  # x carries m_max - 1 looka
 References: none pinned — precipitation-flux schemes where the flux entering a
 cell is carried *and* the hydrometeor state of the previous $M$ levels is
 needed.
+
+TODO: Why are there no references here? Maybe only in Fortran Icon.
 
 ## E. Extra dimensions
 
