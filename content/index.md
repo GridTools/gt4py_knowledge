@@ -49,6 +49,10 @@ Work-in-progress proposals, organized by contributor.
 - [[personal/egparedes/mesh-field-design-space/mesh-field-design-space|Meshes, dimensions and fields: three typed designs and how they layer]] — keywords: type-system, type-checking, dimensions, mesh, fields, domain, connectivities, local-dimensions, unstructured, staggering, halos, boundary-conditions, distributed, global-semantics, local-semantics, dependent-types, nominal-types, cw-complex, exterior-calculus, cochains, reproducibility, ugrid, sgrid, cf-conventions, xarray, coordax, uxarray, design-space, prior-art
 - [[personal/egparedes/discretization-independent-fd-syntax|A discretization-independent surface syntax for finite-difference computations]] — keywords: finite-difference, finite-volume, mesh-invariant, structured, unstructured, exterior-calculus, dec, mimetic, de-rham, cw-complex, location-typing, stencil, weight-generation, rbf-fd, gfdm, moment-matching, conservation, field-operators, icon, pace, pmap, fv3, ifs-fvm, arakawa-staggering, c-grid, d-grid, a-grid, dynamical-core, hevi, vertical-solve, elliptic-solve, mpdata, semi-implicit, miura, atlas, prior-art, dsl-design
 
+### tehrengruber
+
+- [[personal/tehrengruber/scan-design/scan-design|Redesign of the vertical scan in gt4py.next]] — keywords: scan, vertical, reduction, boundary-conditions, windows, fusion, frontend, patterns, tridiagonal, sedimentation, migration, workarounds
+
 <!-- Entry format (index only the main proposal; link appendices/implementations
      from within the proposal document itself, not here):
 - [[personal/havogt/<slug>|Title]] — keywords: keyword1, keyword2
