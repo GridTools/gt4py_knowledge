@@ -985,72 +985,67 @@ views, §3.3 boundaries, §4.6 `history=m`).
 ### Inclusive vs. exclusive
 
 #### Definitions
-- Inclusive scan: output of the scan pass is the output of the scan operator on the first level(s)
+"First level" is the last level for `forward=False`.
+
+- Inclusive scan: output of the scan pass is the output of the scan operator on
+  the first level(s). `init` is the carry read at the first level, never
+  written (today's `scan_operator`, `jax.lax.scan`, Haskell `mapAccumL`).
   - Advantages:
+    - no branch when the first level is the body applied to a neutral seed
+      (`✓ (fold)` verdicts)
   - Disadvantages:
-- Exclusive scan: init value is the output of the scan operator on the first level(s)
+    - any other first level (`out[0] = seed`) needs an `if` on the index
+- Exclusive scan: init value is the output of the scan operator on the first
+  level(s). `init` is written as the first `m` levels, the body runs on the
+  rest (`KView[T, m]` carry; Haskell `scanl`, Blelloch's exclusive scan with
+  the identity as init).
   - Advantages:
+    - any first level without a branch
+    - `init` may be an expression of the inputs at the first level
+      (`2 * inp[K(0)]`)
   - Disadvantages:
+    - a first level that is the body applied to a seed is restated in the init
 
-### Boundary conditions
+Both are equally expressive: inclusive with body `f` and seed `s` equals
+exclusive with `init=f(s, x[K(0)])`, and exclusive with `init=v` equals
+inclusive with `if level == K(0): return v`. Choosing one loses nothing; the
+choice decides where a first level that differs from the body is written: in
+the `init` (exclusive) or in a branch of the body (inclusive). Literature and
+sources: [[personal/tehrengruber/scan-design/scan-discussion|scan discussion]],
+TODO 1.
 
-```python
-def two_sided(x: Column, seed: float, top: float) -> Column:
-    out = np.empty_like(x)
-    out[0] = seed  # bottom BC
-    for k in range(1, x.size - 1):
-        out[k] = 0.5 * out[k - 1] + x[k]
-    out[-1] = top  # top BC
-    return out
-```
+Open decision: the current draft selects the variant by the carry annotation
+(`KView` carry: exclusive; plain carry: inclusive, see "kview in the carry").
+If one variant is to be chosen, reductions (`fold=True`, B1–B4) keep the
+inclusive reading in any case: nothing is written, the init is the identity.
 
-#### Option 1: Using init:
+#### What each variant needs
 
-```python
-@field_operator
-def two_sided(x: IKField, seed: float, top: float) -> IKField:
-    @scan_operator(init=seed)
-    def _interior(out: KView[float], x: KView[float]) -> float:
-        return 0.5 * out[-1] + x[0]
+F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
 
-    interior = _interior(x, range=x.domain[K][:-1])  # K[0] written from init, body on K[1:-1]
-    return concat_where(x.domain[K][:-1], interior, top)  # top BC outside the scan
-    
-@scan_pass
-def _interior(out: KView[float], x: KView[float]) -> float:
-	return 0.5 * out[-1] + x[0]
+| Variant   | Needs                                                                                                                                                                                                                                                       |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inclusive | F: nothing (today's semantics). T: `init` has the carry type. L: nothing. A first level that differs from the body needs index access, see "Accessing index inside the operator".                                                                            |
+| Exclusive | F: field-valued `init`, K-literal slicing (`x[K(0)]`, `f[K(-1)]`, `x[K(0):K(2)]`), `m`-level init forms. T: `init` checked against the carry annotation, `m` levels of `T` per `KView[T, m]` slot (plain slots of a tuple carry keep the inclusive init, A2). D: the init occupies the first `m` levels of the range, the body runs on the rest; `range=`/`extend` when the output is longer than the inputs (A1.3). L: write the init levels, start the body at level `m`. |
 
-@field_operator
-def two_sided(x: IKField, seed: float, top: float) -> IKField:
-    scan(_interior, init=seed, top)
-```
-
-- can only be used for one-sided boundary conditions and only if they are the same on all levels -> otherwise concat_where needs to be used
-- get rid of index_var="level"
-- better compatibility with JAX
-- need to a solution to pass runtime values to scan_operator (see below)
-- Exclusive init means we don't need to protect (e.g. by the init value itself) accesses to past levels (e.g. accessing -1 on the first level)
-
-#### Option 2: Using if-condition:
+#### Example: tridiagonal forward sweep
 
 ```python
-@scan_operator(index_var="level", init=0.0)  # init never read
-def two_sided(out: KView[float], level: K, x: KView[float], seed: float, top: float, grid_info: GridInfo) -> float:
-    if level == K(0):
-        return seed
-    elif level == K(grid_info.nz - 1):
-        return top
-    else:
-        return 0.5 * out[-1] + x[0]
+@scan_operator(init=(0.0, 0.0))  # inclusive: neutral seed
+def forward_sweep(state: tuple[float, float], a: float, b: float, c: float, d: float) -> tuple[float, float]:
+    q_km1, dp_km1 = state
+    norm = 1.0 / (b + a * q_km1)
+    return -c * norm, (d - a * dp_km1) * norm
 
 
-two_sided(x, seed, top, grid_info)
+@scan_operator(init=(-c[K(0)] / b[K(0)], d[K(0)] / b[K(0)]))  # exclusive: first level restated
+def forward_sweep(out: tuple[KView[float], KView[float]], a: float, b: float, c: float, d: float) -> tuple[float, float]:
+    q, dp = out
+    norm = 1.0 / (b + a * q[-1])
+    return -c * norm, (d - a * dp[-1]) * norm
 ```
 
-- more flexible and easier to understand but harder to check correctness
-- init values will not be used
-- need some way to access index inside the operator (see below)
-- from the frontend perspective: if we don't want the user to need to take care of keeping book of the iteration he is in, then the init value has meaning when the scan is inclusive (meaning output of the scan pass is the output of the scan operator on the first level(s))
+For a seeded first level see Boundary Conditions, Option 1 (exclusive) and Option 2 (inclusive) below.
 
 ### Passing runtime values to init
 
@@ -1065,6 +1060,14 @@ def two_sided(x: IKField, seed: float) -> IKField:
 
     return _interior(x, range=x.domain[K][:-1])
 ```
+
+- Advantages:
+  - `seed` is simply in scope, no new argument or keyword
+  - the body sits next to its only use
+- Disadvantages:
+  - nested `def` is not supported today (closure capture and typing of
+    captured variables are new frontend work)
+  - the body cannot be reused in another field operator
 
 #### Option 2: Separate decorator and pass of scan_operator:
 
@@ -1086,6 +1089,16 @@ two_sided(x, seed, top)
 A decorator default (`@scan_operator(axis=KDim, forward=True, init=0.0)`)
 stays possible; the call-site `init=` overrides it.
 
+- Advantages:
+  - smallest change, `init` is already an argument of the scan in the lowering
+  - the body stays reusable
+  - `init` is type-checked against the carry annotation
+- Disadvantages:
+  - the scan parameters are split between decorator (`axis`, `forward`) and
+    call (`init`, `range`)
+  - the precedence of a decorator default over the call-site value has to be
+    defined
+
 #### Option 3: Pass init as String -> becomes implicit parameter of the function (Type?):
 
 ```python
@@ -1100,6 +1113,128 @@ def two_sided(x: IKField, seed: float) -> IKField:
 ```
 
 For a `KView[float, m]` carry with `m > 1` or a tuple carry the implicit parameter would have to be `m` levels or a tuple, which a bare name cannot express.
+
+- Advantages:
+  - the call looks like an ordinary keyword argument
+  - the body names what it needs
+- Disadvantages:
+  - a string-typed API with no static checking
+  - the type comes only from the carry annotation
+  - `m`-level and tuple inits cannot be named
+  - an expression parser is needed if expressions are allowed
+
+#### Option 4: `scan_pass` decorator and a `scan` builtin (BC Option 1, second form):
+
+```python
+@scan_pass
+def _interior(out: KView[float], x: KView[float]) -> float:
+    return 0.5 * out[-1] + x[0]
+
+
+@field_operator
+def two_sided(x: IKField, seed: float, top: float) -> IKField:
+    interior = scan(_interior, x, init=seed, axis=KDim, forward=True, range=x.domain[K][:-1])
+    return concat_where(x.domain[K][:-1], interior, top) # top BC outside the scan
+```
+
+Like Option 2, but all scan arguments (`init`, `axis`, `forward`, `range`)
+are passed to the builtin; the decorator carries none. The body is a plain
+function.
+Same shape as `jax.lax.scan(f, init, xs)`.
+
+- Advantages:
+  - all scan arguments in one place
+  - the body is reusable for either direction or another axis
+  - mirrors `jax.lax.scan`
+- Disadvantages:
+  - two new names (`scan_pass`, `scan`) instead of one
+  - the body is not callable on its own
+  - the builtin is variadic over the body's inputs, so checking `x` against
+    `_interior` needs the builtin typed from the body's signature
+
+#### What each variant needs
+
+F = frontend syntax, T = type system, L = lowering.
+
+| Option                 | Needs                                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 nested `def`         | F: nested `def` in `field_operator`, closure capture. T: captured variables typed from the enclosing scope. L: hoisting of the nested scan.                                   |
+| 2 call-site `init=`    | F: `init=` keyword at the call, decorator init optional. T: checked against the carry annotation. L: nothing, `init` is already a scan argument.                              |
+| 3 string               | F: string -> implicit keyword parameter; expression parser if expressions are allowed. T: type from the carry annotation, no static checking. L: nothing.                           |
+| 4 `scan_pass` + `scan` | F: `scan_pass` decorator; `scan` builtin taking the body, its inputs, `init`, `axis`, `forward`, `range`. T: builtin typed from the body's signature (inputs, carry). L: nothing.      |
+
+### Boundary conditions
+
+```python
+def two_sided(x: Column, seed: float, top: float) -> Column:
+    out = np.empty_like(x)
+    out[0] = seed  # bottom BC
+    for k in range(1, x.size - 1):
+        out[k] = 0.5 * out[k - 1] + x[k]
+    out[-1] = top  # top BC
+    return out
+```
+
+#### Option 1: Using init:
+
+```python
+@scan_pass
+def _interior(out: KView[float], x: KView[float]) -> float:
+    return 0.5 * out[-1] + x[0]
+
+@field_operator
+def two_sided(x: IKField, seed: float, top: float) -> IKField:
+    interior = scan(_interior, x, init=seed, range=x.domain[K][:-1]) # K[0] written from init, body on K[1:-1]
+    return concat_where(x.domain[K][:-1], interior, top)  # top BC outside the scan
+```
+
+- Advantages:
+  - no `index_var="level"`
+  - better compatibility with JAX
+  - the exclusive init means accesses to past levels (`out[-1]` on the first
+    level) need no protection, e.g. by the init value itself
+- Disadvantages:
+  - covers only one-sided boundary conditions that are the same on all
+    levels, anything else needs `concat_where`
+  - needs a solution to pass runtime values to the scan (see above)
+
+#### Option 2: Using if-condition:
+
+```python
+@scan_operator(index_var="level", init=0.0)  # init never read
+def two_sided(out: KView[float], level: K, x: KView[float], seed: float, top: float, grid_info: GridInfo) -> float:
+    if level == K(0):
+        return seed
+    elif level == K(grid_info.nz - 1):
+        return top
+    else:
+        return 0.5 * out[-1] + x[0]
+
+
+two_sided(x, seed, top, grid_info)
+```
+
+- Advantages:
+  - more flexible and easier to understand
+- Disadvantages:
+  - harder to check correctness
+  - the init value is not used
+  - needs a way to access the index inside the operator (see below)
+
+Note, from the frontend perspective: if we don't want the user to need to
+take care of keeping book of the iteration he is in, then the init value has
+meaning when the scan is inclusive (meaning output of the scan pass is the
+output of the scan operator on the first level(s)).
+
+#### What each variant needs
+
+F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
+
+| Option           | Needs                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 `init`         | The exclusive scan (F, T, D, L as in "Inclusive vs. exclusive") plus a runtime init (one of the four options above). D: `range=` for the body's sub-range. Two-sided: `concat_where` + `interior(Koff[-1])` outside (composition.1), or `end=` (A1.4).                                                                                                                      |
+| 2 `if`-condition | F: index access (one of the two options below); `if` on index conditions; `init` optional. T: index type `K`, end anchor. D: guard-refined extents (`out[-1]` under `level != K(0)`). L: the k-loop must be split into one branch-free loop per region of the index conditions (level 0, interior, last level), as GridTools intervals do; this must be guaranteed, not an optional optimization, else every interior level evaluates the boundary branches (A2 today). |
+
 ### Accessing index inside the operator
 
 (currently used only in B2 and if-condition variant for BCs)
@@ -1124,6 +1259,14 @@ def argmin(state: tuple[float, K], level: K, x: KView[float]) -> tuple[float, K]
     return best, k_best
 ```
 
+- Advantages:
+  - the level is a typed parameter, visible in the signature
+  - no new builtin
+- Disadvantages:
+  - the parameter is not passed at the call, so signature and call differ
+  - a string in the decorator names the parameter, with no static link
+  - only available in scan bodies
+
 #### Option 2: Introduce Index builtin:
 
 ```python
@@ -1136,14 +1279,34 @@ def argmin(state: tuple[float, K], x: KView[float]) -> tuple[float, K]:
     return best, k_best
 ```
 
+- Advantages:
+  - signature and call match
+  - also usable in field operator bodies
+  - GTIR already has `index(dim)`
+- Disadvantages:
+  - a new frontend builtin
+  - the level is not visible in the signature
+  - the builtin yields a field over `K` that has to be read at the current
+    level inside the scan
+
 `index_var` and the `index` builtin only differ in how the body obtains the
 current level. Both need the same index type `K` for what the body does with it:
+
 - literals: `K(0)` (BCs, B2)
 - comparison with the running index: `level == K(0)`, `level < K(2)` (A1.1)
 - `±const` arithmetic: `K(grid_info.nz - 2) <= level` (C1)
 - end anchor for the last level: a runtime scalar `K(grid_info.nz - 1)` or an anchor resolved against the scan range (`K.stop - 1`)
 - conversion from an `int32` field: `level == k_start` with `k_start` per column (C3)
 - usable as carry and output element type: `(best, k_best)` in B2
+
+#### What each variant needs
+
+F = frontend syntax, T = type system, L = lowering.
+
+| Option        | Needs                                                                                                                                                                      |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 `index_var` | F: decorator keyword, parameter removed from the call signature. T: index type `K` (list above). L: as Option 2, the parameter is bound to GTIR `index(K)`. |
+| 2 `index`     | F: `index(dim)` in scan (and field operator) bodies. T: index type `K` (list above). L: GTIR `index(dim)` (an integer field over `dim`), read at the current level inside the scan. |
 
 ### Define scan output domain
 
@@ -1168,6 +1331,14 @@ def body(out: KView[float], x: KView[float], c: float, mask: KView[bool]) -> flo
     c          # K-less input
 ```
 
+#### What it needs
+
+F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
+
+| Variant        | Needs                                                                                                                                                                                                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KView` inputs | F: `KView[T]` annotation, literal-offset subscripts (`x[-1]`, `x[1]`), slices (`x[0:m]`). T: `KView[T]`, static-offset `__getitem__`, `x: T` sugar, K-less inputs as plain values, window slices over a local dimension. D: per-input extents, guard-refined, checked against the range (no implicit shrinking). L: k-caches (GTFN), pre-shifted leaves (JAX), shifted views (embedded); half offsets blocked on staggering. |
+
 ### kview in the carry
 
 ```python
@@ -1186,6 +1357,76 @@ def body(out: KView[float, m], ...) -> float  # out[-1..-m] forward, out[1..m] b
   not written (today's semantics).
 - tuple carry mixes both (A2); non-output slots never materialized.
 - `fold=True`: nothing written, final carry returned K-less (B2, B3).
+
+Three ways to declare the history depth `m`, shown for A1.1 (reads two
+levels back):
+
+#### Option 1: Type parameter `KView[T, m]`:
+
+```python
+@scan_operator(init=(x[K(0):K(2)], y[K(0):K(2)]))
+def recurrence(state: tuple[KView[float, 2], KView[float, 2]], x: KView[float], y: KView[float]):
+    u, v = state
+    return x - 0.5 * u[-1] * v[-1], y + u[-2] * v[-1]
+```
+
+- Advantages:
+  - the count sits next to the `u[-2]` reads it permits
+  - the init is checked against it (`m` levels)
+  - different depth per tuple slot is expressible
+- Disadvantages:
+  - a type with a value parameter
+  - the carry annotation differs from the input annotation
+
+#### Option 2: Decorator argument `history=m` (havogt §4.6):
+
+```python
+@scan_operator(history=2, init=(x[K(0):K(2)], y[K(0):K(2)]))
+def recurrence(state: tuple[KView[float], KView[float]], x: KView[float], y: KView[float]):
+    u, v = state
+    return x - 0.5 * u[-1] * v[-1], y + u[-2] * v[-1]
+```
+
+- Advantages:
+  - the count sits next to `axis` and `forward`
+  - carry and input annotations look the same
+- Disadvantages:
+  - one depth for the whole carry
+  - the reads the body may do are not visible in the signature
+
+#### Option 3: Explicit tuple carry (today's delay line):
+
+```python
+@scan_operator(init=(0.0, 0.0, 0.0, 0.0))
+def recurrence(state: tuple[float, float, float, float], x: float, y: float):
+    u_km1, u_km2, v_km1, _ = state
+    u = x - 0.5 * u_km1 * v_km1
+    v = y + u_km2 * v_km1
+    return u, u_km1, v, v_km1  # shift by hand; first two levels need a level check (left out)
+```
+
+- Advantages:
+  - no new feature
+- Disadvantages:
+  - the shift is user code
+  - the delay slots are emitted or discarded (`discarded carry`)
+  - inclusive init, so the first `m` levels need an `if` on the index
+
+Options 1 and 2 have the same semantics and both desugar to Option 3.
+
+#### What each variant needs
+
+F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
+
+| Option               | Needs                                                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 `KView[T, m]`      | F: `KView[T, m]` annotation with an integer parameter, `out[-k]` subscripts. T: `KView[T, m]`, `m` static, direction-dependent offsets, `m`-level init forms. D: init written as the first `m` levels. L: `m`-tuple desugar, flush k-caches, non-output slots not materialized. |
+| 2 `history=m`        | F: decorator keyword. T, D, L: as Option 1, with one `m` for the whole carry.                                                                                                                                                          |
+| 3 tuple carry        | nothing (today).                                                                                                                                                                                                                      |
+
+`fold=True` (nothing written, K-less result) and `exit_condition` (early exit,
+B3) are independent of the history declaration and apply to plain carries too
+(B2, B3).
 
 
 [pmap/dycore/2]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/helmholtz/preconditioner.py#L53
