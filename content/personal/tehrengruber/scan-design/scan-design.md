@@ -985,7 +985,6 @@ views, §3.3 boundaries, §4.6 `history=m`).
 ### Inclusive vs. exclusive
 
 #### Definitions
-"First level" is the last level for `forward=False`.
 
 #### Inclusive scan: output of the scan pass is the output of the scan operator on
   the first level(s). `init` is the carry read at the first level, never
