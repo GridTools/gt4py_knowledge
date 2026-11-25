@@ -987,7 +987,7 @@ views, §3.3 boundaries, §4.6 `history=m`).
 #### Definitions
 "First level" is the last level for `forward=False`.
 
-- Inclusive scan: output of the scan pass is the output of the scan operator on
+#### Inclusive scan: output of the scan pass is the output of the scan operator on
   the first level(s). `init` is the carry read at the first level, never
   written (today's `scan_operator`, `jax.lax.scan`, Haskell `mapAccumL`).
   - Advantages:
@@ -995,7 +995,8 @@ views, §3.3 boundaries, §4.6 `history=m`).
       (`✓ (fold)` verdicts)
   - Disadvantages:
     - any other first level (`out[0] = seed`) needs an `if` on the index
-- Exclusive scan: init value is the output of the scan operator on the first
+
+#### Exclusive scan: init value is the output of the scan operator on the first
   level(s). `init` is written as the first `m` levels, the body runs on the
   rest (`KView[T, m]` carry; Haskell `scanl`, Blelloch's exclusive scan with
   the identity as init).
@@ -1005,6 +1006,9 @@ views, §3.3 boundaries, §4.6 `history=m`).
       (`2 * inp[K(0)]`)
   - Disadvantages:
     - a first level that is the body applied to a seed is restated in the init
+
+TODO: discuss some form of slicing fields (needed to deduce the size of the init)
+
 
 Both are equally expressive: inclusive with body `f` and seed `s` equals
 exclusive with `init=f(s, x[K(0)])`, and exclusive with `init=v` equals
@@ -1046,7 +1050,7 @@ def forward_sweep(out: tuple[KView[float], KView[float]], a: float, b: float, c:
 ```
 
 For a seeded first level see Boundary Conditions, Option 1 (exclusive) and Option 2 (inclusive) below.
-
+--> we assume we have both options in the frontend for now
 ### Passing runtime values to init
 
 #### Option 1: Define scan_operator inside field_operator:
@@ -1126,7 +1130,7 @@ For a `KView[float, m]` carry with `m > 1` or a tuple carry the implicit paramet
 #### Option 4: `scan_pass` decorator and a `scan` builtin (BC Option 1, second form):
 
 ```python
-@scan_pass
+@scalar_operator
 def _interior(out: KView[float], x: KView[float]) -> float:
     return 0.5 * out[-1] + x[0]
 
@@ -1134,6 +1138,7 @@ def _interior(out: KView[float], x: KView[float]) -> float:
 @field_operator
 def two_sided(x: IKField, seed: float, top: float) -> IKField:
     interior = scan(_interior, x, init=seed, axis=KDim, forward=True, range=x.domain[K][:-1])
+    interior = scan_op(x, init=seed, axis=KDim, forward=True, range=x.domain[K][:-1])(_interior)
     return concat_where(x.domain[K][:-1], interior, top) # top BC outside the scan
 ```
 
@@ -1162,13 +1167,13 @@ F = frontend syntax, T = type system, L = lowering.
 | 2 call-site `init=`    | F: `init=` keyword at the call, decorator init optional. T: checked against the carry annotation. L: nothing, `init` is already a scan argument.                              |
 | 3 string               | F: string -> implicit keyword parameter; expression parser if expressions are allowed. T: type from the carry annotation, no static checking. L: nothing.                           |
 | 4 `scan_pass` + `scan` | F: `scan_pass` decorator; `scan` builtin taking the body, its inputs, `init`, `axis`, `forward`, `range`. T: builtin typed from the body's signature (inputs, carry). L: nothing.      |
-
+--> Option 4: Jax-scan style, we need to decide on a name for the decorator for the scan-pass
 ### Boundary conditions
 
 ```python
-def two_sided(x: Column, seed: float, top: float) -> Column:
+def two_sided(x: Column, bottom: float, top: float) -> Column:
     out = np.empty_like(x)
-    out[0] = seed  # bottom BC
+    out[0] = bottom  # bottom BC
     for k in range(1, x.size - 1):
         out[k] = 0.5 * out[k - 1] + x[k]
     out[-1] = top  # top BC
@@ -1183,8 +1188,8 @@ def _interior(out: KView[float], x: KView[float]) -> float:
     return 0.5 * out[-1] + x[0]
 
 @field_operator
-def two_sided(x: IKField, seed: float, top: float) -> IKField:
-    interior = scan(_interior, x, init=seed, range=x.domain[K][:-1]) # K[0] written from init, body on K[1:-1]
+def two_sided(x: IKField, bottom: float, top: float) -> IKField:
+    interior = scan_exclusive(_interior, x, init=bottom, range=x.domain[K][:-1]) # K[0] written from init, body on K[1:-1]
     return concat_where(x.domain[K][:-1], interior, top)  # top BC outside the scan
 ```
 
@@ -1202,16 +1207,25 @@ def two_sided(x: IKField, seed: float, top: float) -> IKField:
 
 ```python
 @scan_operator(index_var="level", init=0.0)  # init never read
-def two_sided(out: KView[float], level: K, x: KView[float], seed: float, top: float, grid_info: GridInfo) -> float:
+def two_sided(out: KView[float], level: K, x: KView[float], bottom: float, top: float, grid_info: GridInfo) -> float:
     if level == K(0):
-        return seed
+        return bottom
     elif level == K(grid_info.nz - 1):
         return top
     else:
         return 0.5 * out[-1] + x[0]
 
+    
+@scan_operator(index_var="level", init=0.0)  # init never read
+def two_sided(out: KView[float], level: K, x: KView[float], bottom: float, top: float, grid_info: GridInfo) -> float:
+    if level == K(0):
+        return bottom
+    elif K(0) < level < K(grid_info.nz - 1):
+        return 0.5 * out[-1] + x[0]
+    else:
+      return top
 
-two_sided(x, seed, top, grid_info)
+two_sided(x, bottom, top, grid_info)
 ```
 
 - Advantages:
@@ -1235,6 +1249,7 @@ F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
 | 1 `init`         | The exclusive scan (F, T, D, L as in "Inclusive vs. exclusive") plus a runtime init (one of the four options above). D: `range=` for the body's sub-range. Two-sided: `concat_where` + `interior(Koff[-1])` outside (composition.1), or `end=` (A1.4).                                                                                                                      |
 | 2 `if`-condition | F: index access (one of the two options below); `if` on index conditions; `init` optional. T: index type `K`, end anchor. D: guard-refined extents (`out[-1]` under `level != K(0)`). L: the k-loop must be split into one branch-free loop per region of the index conditions (level 0, interior, last level), as GridTools intervals do; this must be guaranteed, not an optional optimization, else every interior level evaluates the boundary branches (A2 today). |
 
+--> Preference is Option 1
 ### Accessing index inside the operator
 
 (currently used only in B2 and if-condition variant for BCs)
@@ -1308,15 +1323,17 @@ F = frontend syntax, T = type system, L = lowering.
 | 1 `index_var` | F: decorator keyword, parameter removed from the call signature. T: index type `K` (list above). L: as Option 2, the parameter is bound to GTIR `index(K)`. |
 | 2 `index`     | F: `index(dim)` in scan (and field operator) bodies. T: index type `K` (list above). L: GTIR `index(dim)` (an integer field over `dim`), read at the current level inside the scan. |
 
+--> Preference is Option 2 (but let's discuss `reduce` first)
+
+TODO: discuss `reduce` and `fold` (B1–B4) and how they relate to the index access, then decide on Option 1 or 2 for the index access.
 ### Define scan output domain
 
  `range=` at the call else full K range of its inputs
 
 ```python
-inclusive(w, range=extend(w.domain[K], 1))                 # one level more, filled by init (A1.3)
-_forward_sweep(x, y, surface, range=x.domain[K][:-1])      # explicit sub-range (composition.1)
-start_at(x, range=named_range(K, k_start, x.domain[K].stop))  # k_start a field: a mask, not a domain (C3)
+scan(w, range=named_range(K, k_start, k_end))
 ```
+--> scan_range should be a 1D-domain, allow construction of a domain only with absolute indices (as a first step)
 
 ### kview in the inputs
 
@@ -1342,12 +1359,12 @@ F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
 ### kview in the carry
 
 ```python
-def body(out: KView[float, m], ...) -> float  # out[-1..-m] forward, out[1..m] backward; out[0] unreadable
+def body(carry: KView[float, m], ...) -> float  # carry[-1..-m] forward, carry[1..m] backward; carry[0] unreadable
 ```
 
 - `KView[T, m]`: `m` is the number of previously written levels the body may
-  read (`out[-1]` is the value returned one level ago, the return value is the
-  implicit `out[0]`) and the number of levels the init supplies. A missing
+  read (`carry[-1]` is the value returned one level ago, the return value is the
+  implicit `carry[0]`) and the number of levels the init supplies. A missing
   count means `m = 1`; it is written when more is needed (`KView[float, 2]`
   in A1.1).
 - the `m` init levels are *written*: they are the first `m` levels of the
@@ -1414,6 +1431,23 @@ def recurrence(state: tuple[float, float, float, float], x: float, y: float):
 
 Options 1 and 2 have the same semantics and both desugar to Option 3.
 
+Example where you want to use the previous state that is not covered by the kview and you don't want to recompute it
+```python
+@scan_operator(init=(0.0))
+def tmp(state: KView[float], x: KView[float]):
+    u = state
+    return -u, x * u
+```
+
+Example where you compute a value on the current level and on the next level you don't want to recompute it
+```python
+@scan_operator(init=(0.0))
+def tmp(state: float, x: IKField):
+    u = state
+    return # TODO: fix example
+```
+TODO: look for examples where the splitting out and carry is needed that is not covered by the kview
+
 #### What each variant needs
 
 F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
@@ -1427,6 +1461,10 @@ F = frontend syntax, T = type system, D = domain/extent analysis, L = lowering.
 `fold=True` (nothing written, K-less result) and `exit_condition` (early exit,
 B3) are independent of the history declaration and apply to plain carries too
 (B2, B3).
+
+### should we split out and carry?
+
+TODO
 
 
 [pmap/dycore/2]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/helmholtz/preconditioner.py#L53
