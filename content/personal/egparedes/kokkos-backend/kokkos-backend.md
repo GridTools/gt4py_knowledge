@@ -367,6 +367,42 @@ Full setup, method, all tables and limits are in the
 [[personal/egparedes/kokkos-backend/kokkos-backend_benchmarks|benchmark appendix]].
 The kernel and harness sources are in `kokkos-backend/bench/`.
 
+**What was benchmarked.** All fields are `float64`.
+
+- **Kernels:**
+  - `lap` is a Cartesian Laplacian and `lap2` is `lap(lap)`.
+  - `hdiff` is flux-limited horizontal diffusion (4 stencils, 3 temporaries)
+    and `tmpst` is two statements with 1 temporary.
+  - `tri` is a tridiagonal vertical solve (forward and backward sweep) writing
+    to caller fields; `tritmp` keeps its intermediates as temporaries.
+  - `v2e` sums over the 6 edges of each vertex, with 5 % skip values (-1).
+    `chain` goes vertex → edges → vertices (E2V inside V2E).
+- **Sizes:**
+  - `large` is a 512×512×80 Cartesian domain, or a mesh of 160k vertices and
+    480k edges with 80 levels.
+  - `xlarge` (GPU only) is 1024×1024×80, or 1.05M vertices and 3.1M edges.
+  - Every large working set exceeds the CPU's last-level cache.
+- **Mesh numbering:**
+  - The meshes are periodic triangulated grids. Each is used with two
+    numberings of its vertices and edges, so the same topology gives two
+    memory-access patterns.
+  - **Local numbering** is grid order. Neighbors of a point get nearby
+    indices, so neighbor-table lookups touch nearby memory, and a GPU block or
+    CPU row reads few distinct cache lines **[I]**. This is the locality-ordered case
+    a well-ordered real mesh aims for.
+  - **Random numbering** applies a random permutation to the same mesh.
+    Neighbor indices are scattered, so almost every neighbor access is a cache
+    or memory-sector miss, and run time is dominated by memory traffic rather
+    than by the kernel code **[I]**. It is a deliberate worst case.
+  - **Why the distinction matters.** On random tables the GPU block shape,
+    not the source form, decides the time **[M]**: a flat `RangePolicy` ran
+    `v2e` in 0.35x gtfn's time at xlarge but 0.88x at large. gtfn's 32×8 tile
+    is not optimal there **[I]**.
+  - This is why §5 has no mesh-ordering knob: with gtfn's tile, Kokkos is at
+    parity on random tables. It is also why the acceptance bar treats the two
+    orderings as separate families.
+  - A real ICON grid was not tested (spike item 4).
+
 **GPU, large / xlarge, candidate shapes [M]**
 
 | family | kernel | ratio vs stock gtfn | at or below 1.0? |
