@@ -83,7 +83,7 @@ new on at least one of them.
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Carry width        | 0 (none) · 1 scalar · small tuple (2–5) · 21–28 components (muphys, cloudsc)                                                                                                          |
 | Carry content      | accumulator · previous *output* (order 1) · previous *outputs* (order $m$) · previous/next *input* (delay line, lookahead) · boolean flag · level counter · level index · ring buffer |
-| Output consumption | per level (3D) · final value only (column-constant) · both                                                                                                                            |
+| Output consumption | per level (3D) · final value only (column-constant) · both · none (carry-only slot)                                                                                                   |
 | Body uniformity    | uniform · start-anchored region(s) · end-anchored region(s) · data-dependent anchor · per-band (interval dispatch)                                                                    |
 | Neighbour access   | current level only · input at $k \pm 1$ · bounded window of $M$ levels                                                                                                               |
 | Trip count         | full K range · static sub-range · per-column data-dependent                                                                                                                           |
@@ -96,6 +96,7 @@ new on at least one of them.
 | --------- | -------------------------------------------------- | ---------------------- | --------- | --------------------------------------------- |
 | [A1](#a1) | Recurrence on own output (any body, width, order)  | shifted state tuple    | per level | solves, radiation fluxes, integrals, stride-2 |
 | [A2](#a2) | Monotone activation flag (work skipping)           | flag + state           | per level | muphys species, cloud searches                |
+| [A3](#a3) | Carry-only state (out ≠ carry)                     | slot returned + discarded | per level | solver denominators, carried fall-speed factors |
 | [B1](#b1) | Fixed-op column reduction                          | accumulator            | final     | column integrals, `cc_max`, `v_mat_prod`      |
 | [B2](#b2) | Arg-reduction + value at the found level           | value + index          | final     | `i_cloud_top`, PHYEX `ZTMIN`/`PZZ(ITPL)`      |
 | [B3](#b3) | First-hit / last-hit level search                  | flag + value           | final     | cloud base/top, PBL height, `tropopause`      |
@@ -229,6 +230,42 @@ References: the per-species `activated` latch [icon4py/muphys/2]; pace's
 `stop_k` melt latch and ×4 `no_fall` latches [pace/shield/5]; the `flg` latch
 inside every pace level search, and the "not found yet" gate of [B3](#b3) —
 the same latch, read inverted.
+
+### A3 {#a3} Carry-only state (out ≠ carry)
+
+[A1](#a1) where part of the state is passed level to level but never emitted:
+the output consumed outside the scan is strictly less than the state inside.
+The carry-only slots seen in production are (i) whole-history accumulators no
+bounded window of outputs or inputs can reconstruct, (ii) derived values too
+expensive to recompute from the previous level's inputs, and (iii) transforms
+of the output that could only be reconstructed by inverting them.
+
+```python
+# example A3
+def fall(q: Column, sink: Column, dt: float) -> Column:
+    tend = np.empty_like(q)
+    qn_above = 0.0                  # carried, never emitted
+    for k in range(q.size):
+        qn = (q[k] + sink[k] * qn_above) / (1.0 + sink[k])
+        tend[k] = (qn - q[k]) / dt  # the wanted output
+        qn_above = qn
+    return tend
+```
+
+Today the slot must be returned and discarded by the wrapping field operator —
+13 of `_icon_graupel_scan`'s 28 slots never leave the scan.
+
+References: (i) the Thomas denominator `bet` in sim1_solver [pace/fv3/1], the
+damped-momentum prefix sums `dmdir`/`p_ref` of which only the column total is
+used [pace/fv3/9], the condensate-free pressure sum `peg` beside the emitted
+`pem` [pace/fv3/4], `dist_cldtop` and the level counter in
+`_icon_graupel_scan` [icon4py/microphysics/1]; (ii) the `exp()`-heavy
+fall-speed factors and saturation pressure of the level above in
+`_icon_graupel_scan` [icon4py/microphysics/1], the bulk Richardson number
+`rib`/`h_ag` behind the 2D boundary-layer height [pmap/dycore/8]; (iii)
+cloudsc's updated species masses `qin..qvn` behind the emitted tendencies
+[pmap/microphysics/1]. The borrow cascades of [A1](#a1) [pace/fv3/7] and every
+[A2](#a2) latch are carry-only state too.
 
 ## B. Column reductions (final value only)
 
