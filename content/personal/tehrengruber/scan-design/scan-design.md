@@ -388,6 +388,7 @@ Classification:
 | A1.3          | A1 staggered, integer indices | poor readability               | [`level counter`](#level-counter), [`pass-through carry`](#pass-through-carry), [`outside the DSL`](#outside-the-dsl)                                  |
 | A1.4          | A1 + neighbour inputs         | poor readability & performance | [`delay line`](#delay-line), [`pre-shift`](#pre-shift)                                                                                                 |
 | A2            | A2 latch                      | poor performance               | — (both branches evaluated at every level: no work skipping)                                                                                           |
+| A3            | A3 carry-only state           | poor readability & performance | [`discarded carry`](#discarded-carry) (the slot is emitted and materialized unless the backend elides it)                                              |
 | B1            | B1 reduction                  | poor readability & performance | [`last-level slice`](#last-level-slice)                                                                                                                |
 | B2            | B2 arg-reduction              | poor readability & performance | [`level counter`](#level-counter), [`pass-through carry`](#pass-through-carry), [`last-level slice`](#last-level-slice)                                |
 | B3            | B3 first hit                  | poor readability & performance | [`last-level slice`](#last-level-slice)                                                                                                                |
@@ -538,6 +539,35 @@ def activated(state, q: KView[float], mask: KView[float]):
 	active |= mask[0]
 	return active, 0.5 * (out[-1] + q[0]) if active else q[0]
 ```
+
+#### [[personal/tehrengruber/scan-design/scan-patterns#a3|A3]]
+
+```python
+# example A3
+def fall(q: Column, sink: Column, dt: float) -> Column:
+    tend = np.empty_like(q)
+    qn_above = 0.0                  # carried, never emitted
+    for k in range(q.size):
+        qn = (q[k] + sink[k] * qn_above) / (1.0 + sink[k])
+        tend[k] = (qn - q[k]) / dt  # the wanted output
+        qn_above = qn
+    return tend
+
+# today: the carry slot is a second output, discarded by the wrapper
+@scan_operator(init=(0.0, 0.0))
+def _fall(state: tuple[float, float], q: KView[float], sink: KView[float], dt: float):
+    _, qn_above = state
+    qn = (q[0] + sink[0] * qn_above) / (1.0 + sink[0])
+    return (qn - q[0]) / dt, qn
+
+@field_operator
+def fall(q: IKField, sink: IKField, dt: float) -> IKField:
+    tend, _ = _fall(q, sink, dt)  # discarded carry
+    return tend
+```
+
+Production occurrences and the open design question: "should we split out and
+carry?" under Requirements.
 
 #### [[personal/tehrengruber/scan-design/scan-patterns#b1|B1]]
 
@@ -1430,22 +1460,33 @@ def recurrence(state: tuple[float, float, float, float], x: float, y: float):
 
 Options 1 and 2 have the same semantics and both desugar to Option 3.
 
-Example where you want to use the previous state that is not covered by the kview and you don't want to recompute it
+Two shapes of carry-only state found in the surveyed code (full sweep under
+"should we split out and carry?" below). First: the carry is a transform of
+the output, so a `KView` on the output could reconstruct it only by inverting
+that transform — cloudsc's fall cascade carries the updated species mass but
+emits the tendency [pmap/microphysics/1]:
+
 ```python
-@scan_operator(init=(0.0))
-def tmp(state: KView[float], x: KView[float]):
-    u = state
-    return -u, x * u
+@scan_operator(init=0.0)
+def fall(qn_above: float, q: float, sink: float, dt: float) -> tuple[float, float]:
+    qn = (q + sink * qn_above) / (1.0 + sink)  # updated mass, needed by the level below
+    return (qn - q) / dt, qn  # the tendency is the wanted output; qn is only carried
 ```
 
-Example where you compute a value on the current level and on the next level you don't want to recompute it
+Second: a value computed on the current level and reused on the next, where
+recomputation is possible (it is a function of the previous level's inputs,
+reachable through `KView` inputs) but unwanted — `_icon_graupel_scan` carries
+the `exp()`-heavy fall-speed factors of the level
+above [icon4py/microphysics/1]:
+
 ```python
-@scan_operator(init=(0.0))
-def tmp(state: float, x: IKField):
-    u = state
-    return # TODO: fix example
+@scan_operator(init=(0.0, 1.0))
+def sediment(state: tuple[float, float], qx: float, rho: float) -> tuple[float, float]:
+    flx_above, crho_above = state       # computed one level up, carried
+    flx_in = flx_above * crho_above     # precip arriving uses the factors of the level above
+    crho = exp(0.5 * log(rho0 / rho))   # this level's density factor (expensive)
+    return flx_in + qx * rho * crho, crho  # the flux is the wanted output; crho only carried
 ```
-TODO: look for examples where the splitting out and carry is needed that is not covered by the kview
 
 #### What each variant needs
 
@@ -1463,7 +1504,58 @@ B3) are independent of the history declaration and apply to plain carries too
 
 ### should we split out and carry?
 
-TODO
+Should the language distinguish the levels the scan *emits* (out) from state
+it only passes level to level (carry)? Today both are one tuple: every carried
+value is returned, and the wrapper discards the slots nobody wants
+([`discarded carry`](#discarded-carry)). A sweep over the surveyed code bases
+(cartesian stencils included — there, any temporary written and read at
+`[0,0,±1]` inside a `FORWARD`/`BACKWARD` computation is carry state that never
+leaves the scan) finds ~30 occurrences of such state — cataloged as
+[[personal/tehrengruber/scan-design/scan-patterns#a3|A3]], example A3 above —
+in three classes:
+
+- **Carried input copies** — the previous level's inputs, kept to use them one
+  level later: muphys carries `rho` and `t_in` [icon4py/muphys/1],
+  `_icon_graupel_scan` carries `qv..qg` and `rho` [icon4py/microphysics/1].
+  Covered by `KView` on the *inputs* (`rho[-1]`); no split needed.
+- **Delayed outputs** — previous levels of an emitted field (the delay lines
+  above). Covered by `KView` on the carry; no split needed.
+- **Carry-only computed state** — covered by neither; these need a slot that
+  is carried but not emitted:
+  - whole-history accumulators, impossible to recompute from any bounded
+    window: the Thomas denominator `bet_k = f(bet_{k-1}, …)` in `sim1_solver`
+    [pace/fv3/1]; the damped-momentum prefix sums `dmdir` and `p_ref` in
+    `ray_fast`, of which only the column total is used (then broadcast back
+    up) [pace/fv3/9]; the condensate-free pressure sum `peg` carried in
+    lockstep with the emitted `pem` [pace/fv3/4]; the borrow-cascade deficits
+    `lower_fix`/`upper_fix` [pace/fv3/7]; the displaced-height cascade `zt`
+    and the `no_fall`/`stop_k` latches [pace/shield/5]; `dist_cldtop` and the
+    level counter in `_icon_graupel_scan` [icon4py/microphysics/1].
+  - values recomputable only at a price, computed at level k and read at k+1
+    (second example above): the `exp()`-heavy density factors `crho1o2` and
+    `crhofac_qi`, the snow-interception parameters and the saturation
+    pressure `qvsw` in `_icon_graupel_scan` — 13 of its 28 slots never leave
+    the scan [icon4py/microphysics/1]; the bulk Richardson number `rib` (and
+    `h_ag`) in the PMAP boundary-layer height, where outside only the 2D
+    height is wanted [pmap/dycore/8]. Contrast muphys, which carries the raw
+    inputs `rho`/`t_in` instead and *recomputes* the previous level's fall
+    speed from them each level [icon4py/muphys/1] — the code shape this
+    class turns into when the derived value is not carried.
+  - a carry that is an invertible transform of the output (first example
+    above): cloudsc carries the updated species masses `qin..qvn` and the
+    `fallsink_qx` factors and emits the tendencies `(qxn - qx)/dt + …`
+    [pmap/microphysics/1].
+
+Related but distinct: emitting the full column when only one level is read
+outside — the tmx energy diagnostics materialize four running sums whose
+"last level is the column integral" [icon4py/tmx/1]; that is a
+`fold=True`/`range=` question, not a carry question.
+
+Whatever the syntax, the lowering requirement is the same: non-emitted slots
+stay in registers/k-caches ("non-output slots not materialized" in the tables
+above). An explicit out/carry split states this in the signature; keeping one
+tuple infers it from the wrapper discarding slots, which requires the scan and
+its consumer to be visible together (within one field operator today).
 
 
 [pmap/dycore/2]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/helmholtz/preconditioner.py#L53
@@ -1478,3 +1570,11 @@ TODO
 [icon4py/muphys/5]: https://github.com/C2SM/icon4py/blob/515763c3e42776c35a7751ce7173c412392dbec4/model/atmosphere/subgrid_scale_physics/muphys/src/icon4py/model/atmosphere/subgrid_scale_physics/muphys/implementations/graupel.py#L488
 [icon4py/dycore/1]: https://github.com/GridTools/gt4py/blob/f3b3ab28ecfc4de6ef914d6e7bed17a5447fd43f/tests/next_tests/integration_tests/multi_feature_tests/ffront_tests/test_icon_like_scan.py#L43
 [icon4py/diagnostics/1]: https://github.com/C2SM/icon4py/blob/515763c3e42776c35a7751ce7173c412392dbec4/model/common/src/icon4py/model/common/diagnostic_calculations/stencils/diagnose_pressure.py#L15
+[icon4py/microphysics/1]: https://github.com/C2SM/icon4py/blob/f8032fd51b104a4fc6322c31cb5a2ad55316203a/model/atmosphere/subgrid_scale_physics/microphysics/src/icon4py/model/atmosphere/subgrid_scale_physics/microphysics/stencils/graupel_stencils.py#L40
+[icon4py/tmx/1]: https://github.com/C2SM/icon4py/blob/f8032fd51b104a4fc6322c31cb5a2ad55316203a/model/atmosphere/subgrid_scale_physics/tmx/src/icon4py/model/atmosphere/subgrid_scale_physics/tmx/stencils/energy_update_stencils.py#L71
+[pace/fv3/1]: https://github.com/NOAA-GFDL/pyFV3/blob/9df3c68fc15d5361903fa7a0ea007b63e7d0ed9f/pyfv3/stencils/sim1_solver.py#L11
+[pace/fv3/4]: https://github.com/NOAA-GFDL/pyFV3/blob/9df3c68fc15d5361903fa7a0ea007b63e7d0ed9f/pyfv3/stencils/riem_solver_c.py#L12
+[pace/fv3/7]: https://github.com/NOAA-GFDL/pyFV3/blob/9df3c68fc15d5361903fa7a0ea007b63e7d0ed9f/pyfv3/stencils/fillz.py#L11
+[pace/fv3/9]: https://github.com/NOAA-GFDL/pyFV3/blob/9df3c68fc15d5361903fa7a0ea007b63e7d0ed9f/pyfv3/stencils/ray_fast.py#L36
+[pace/shield/5]: https://github.com/NOAA-GFDL/pySHiELD/blob/dc85a881d7f72ccfb71dd88c040ba304bb97207c/pyshield/stencils/gfs_microphysics.py#L694
+[pmap/dycore/8]: https://github.com/PMAP-Project/PMAP/blob/3041d4686f463d877ba51009b4e449435c693683/src/pmap/diagnostics/boundary_layer_height.py#L87
